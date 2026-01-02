@@ -6,9 +6,13 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod build;
 mod config;
+mod error;
 mod project;
 
+use build::{run_build, run_check, run_run, run_test, run_verify, BuildOptions};
+use error::GotganError;
 use project::{create_project, init_project};
 
 #[derive(Parser)]
@@ -45,15 +49,58 @@ enum Commands {
         #[arg(long)]
         lib: bool,
     },
+
+    /// Build the project
+    Build {
+        /// Build in release mode with optimizations
+        #[arg(long)]
+        release: bool,
+
+        /// Output directory for build artifacts
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Build and run the project
+    Run {
+        /// Build in release mode
+        #[arg(long)]
+        release: bool,
+
+        /// Arguments to pass to the program
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+
+    /// Type-check the project without building
+    Check,
+
+    /// Verify contracts using SMT solver
+    Verify {
+        /// Specific file to verify (defaults to all)
+        #[arg(short, long)]
+        file: Option<PathBuf>,
+    },
+
+    /// Run tests
+    Test {
+        /// Filter tests by pattern
+        #[arg(short, long)]
+        filter: Option<String>,
+
+        /// Show verbose output
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let result = match cli.command {
+    let result: Result<(), GotganError> = match cli.command {
         Commands::New { name, path, lib } => {
             let project_path = path.unwrap_or_else(|| PathBuf::from(&name));
-            create_project(&name, &project_path, lib)
+            create_project(&name, &project_path, lib).map_err(GotganError::from)
         }
         Commands::Init { name, lib } => {
             let current_dir = std::env::current_dir().expect("Failed to get current directory");
@@ -63,8 +110,22 @@ fn main() -> ExitCode {
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "unnamed".to_string())
             });
-            init_project(&project_name, &current_dir, lib)
+            init_project(&project_name, &current_dir, lib).map_err(GotganError::from)
         }
+        Commands::Build { release, output } => {
+            let opts = BuildOptions { release, output };
+            run_build(opts).map_err(GotganError::from)
+        }
+        Commands::Run { release, args } => {
+            let opts = BuildOptions {
+                release,
+                output: None,
+            };
+            run_run(opts, args).map_err(GotganError::from)
+        }
+        Commands::Check => run_check().map_err(GotganError::from),
+        Commands::Verify { file } => run_verify(file).map_err(GotganError::from),
+        Commands::Test { filter, verbose } => run_test(filter, verbose).map_err(GotganError::from),
     };
 
     match result {
