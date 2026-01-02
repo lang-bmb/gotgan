@@ -430,6 +430,67 @@ pub fn run_test(filter: Option<String>, verbose: bool) -> Result<(), BuildError>
     Ok(())
 }
 
+/// Clean build artifacts
+pub fn run_clean() -> Result<(), BuildError> {
+    let ctx = ProjectContext::find()?;
+
+    println!(
+        "    Cleaning {} v{}",
+        ctx.manifest.package.name, ctx.manifest.package.version
+    );
+
+    if ctx.target_dir.exists() {
+        std::fs::remove_dir_all(&ctx.target_dir)?;
+        println!("   Removed {}", ctx.target_dir.display());
+    } else {
+        println!("   Nothing to clean (target/ does not exist)");
+    }
+
+    Ok(())
+}
+
+/// Display dependency tree
+pub fn run_tree(show_all: bool) -> Result<(), BuildError> {
+    let ctx = ProjectContext::find()?;
+
+    println!(
+        "{} v{}",
+        ctx.manifest.package.name, ctx.manifest.package.version
+    );
+
+    if ctx.dependencies.is_empty() {
+        println!("└── (no dependencies)");
+        return Ok(());
+    }
+
+    let dep_count = ctx.dependencies.len();
+    for (i, dep) in ctx.dependencies.iter().enumerate() {
+        let is_last = i == dep_count - 1;
+        let prefix = if is_last { "└──" } else { "├──" };
+
+        if show_all {
+            println!(
+                "{} {} v{} ({})",
+                prefix,
+                dep.name,
+                dep.version,
+                dep.path.display()
+            );
+            // Show source files count
+            let child_prefix = if is_last { "    " } else { "│   " };
+            println!(
+                "{}└── {} source file(s)",
+                child_prefix,
+                dep.source_files.len()
+            );
+        } else {
+            println!("{} {} v{}", prefix, dep.name, dep.version);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

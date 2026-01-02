@@ -12,7 +12,7 @@ mod error;
 mod project;
 mod resolver;
 
-use build::{run_build, run_check, run_run, run_test, run_verify, BuildOptions};
+use build::{run_build, run_check, run_clean, run_run, run_test, run_tree, run_verify, BuildOptions};
 use error::GotganError;
 use project::{create_project, init_project};
 
@@ -93,6 +93,16 @@ enum Commands {
         #[arg(short, long)]
         verbose: bool,
     },
+
+    /// Remove build artifacts (target directory)
+    Clean,
+
+    /// Display dependency tree
+    Tree {
+        /// Show all transitive dependencies
+        #[arg(short, long)]
+        all: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -127,6 +137,8 @@ fn main() -> ExitCode {
         Commands::Check => run_check().map_err(GotganError::from),
         Commands::Verify { file } => run_verify(file).map_err(GotganError::from),
         Commands::Test { filter, verbose } => run_test(filter, verbose).map_err(GotganError::from),
+        Commands::Clean => run_clean().map_err(GotganError::from),
+        Commands::Tree { all } => run_tree(all).map_err(GotganError::from),
     };
 
     match result {
