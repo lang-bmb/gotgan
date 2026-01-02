@@ -10,6 +10,7 @@ mod build;
 mod config;
 mod error;
 mod project;
+mod resolver;
 
 use build::{run_build, run_check, run_run, run_test, run_verify, BuildOptions};
 use error::GotganError;

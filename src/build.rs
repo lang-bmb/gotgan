@@ -3,6 +3,7 @@
 //! Wraps the bmb compiler to build, run, check, verify, and test BMB projects.
 
 use crate::config::{ConfigError, Manifest};
+use crate::resolver::{DependencyResolver, ResolveError, ResolvedDep};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
@@ -40,6 +41,9 @@ pub enum BuildError {
 
     #[error("bmb compiler not found in PATH")]
     CompilerNotFound,
+
+    #[error("Dependency error: {0}")]
+    ResolveError(#[from] ResolveError),
 }
 
 /// Project context loaded from gotgan.toml
@@ -48,6 +52,7 @@ pub struct ProjectContext {
     pub manifest: Manifest,
     pub src_dir: PathBuf,
     pub target_dir: PathBuf,
+    pub dependencies: Vec<ResolvedDep>,
 }
 
 impl ProjectContext {
@@ -62,11 +67,24 @@ impl ProjectContext {
         let src_dir = root.join("src");
         let target_dir = root.join("target");
 
+        // Resolve local path dependencies
+        let mut resolver = DependencyResolver::new(root.clone());
+        let dependencies = resolver.resolve(&manifest)?;
+
+        if !dependencies.is_empty() {
+            println!(
+                "   Resolved {} local {}",
+                dependencies.len(),
+                if dependencies.len() == 1 { "dependency" } else { "dependencies" }
+            );
+        }
+
         Ok(Self {
             root,
             manifest,
             src_dir,
             target_dir,
+            dependencies,
         })
     }
 
@@ -80,10 +98,28 @@ impl ProjectContext {
         self.src_dir.join("lib.bmb")
     }
 
-    /// Get all BMB source files
+    /// Get all BMB source files (project only)
     pub fn source_files(&self) -> Result<Vec<PathBuf>, BuildError> {
         let mut files = Vec::new();
         collect_bmb_files(&self.src_dir, &mut files)?;
+        if files.is_empty() {
+            return Err(BuildError::NoSourceFiles);
+        }
+        Ok(files)
+    }
+
+    /// Get all BMB source files including dependencies
+    pub fn all_source_files(&self) -> Result<Vec<PathBuf>, BuildError> {
+        let mut files = Vec::new();
+
+        // Add dependency source files first (build order)
+        for dep in &self.dependencies {
+            files.extend(dep.source_files.clone());
+        }
+
+        // Then add project source files
+        collect_bmb_files(&self.src_dir, &mut files)?;
+
         if files.is_empty() {
             return Err(BuildError::NoSourceFiles);
         }
@@ -199,6 +235,16 @@ pub fn run_build(opts: BuildOptions) -> Result<(), BuildError> {
         "   Building {} v{}",
         ctx.manifest.package.name, ctx.manifest.package.version
     );
+
+    // Print dependency info
+    for dep in &ctx.dependencies {
+        println!(
+            "   Compiling {} v{} ({})",
+            dep.name,
+            dep.version,
+            dep.path.display()
+        );
+    }
 
     // Check for main.bmb (binary project)
     let main_file = ctx.main_file();
