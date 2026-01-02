@@ -11,9 +11,10 @@ mod config;
 mod error;
 mod lock;
 mod project;
+mod registry;
 mod resolver;
 
-use build::{run_add, run_build, run_check, run_clean, run_run, run_test, run_tree, run_update, run_verify, BuildOptions};
+use build::{run_add, run_build, run_check, run_clean, run_publish, run_run, run_search, run_test, run_tree, run_update, run_verify, BuildOptions};
 use error::GotganError;
 use project::{create_project, init_project};
 
@@ -117,9 +118,34 @@ enum Commands {
         #[arg(short, long)]
         path: Option<String>,
 
+        /// Version constraint (e.g., "1.0", "^2.0")
+        #[arg(short, long)]
+        version: Option<String>,
+
         /// Add as dev dependency
         #[arg(long)]
         dev: bool,
+    },
+
+    /// Search for packages in the registry
+    Search {
+        /// Search query
+        query: String,
+
+        /// Maximum number of results
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+
+    /// Publish a package to the registry
+    Publish {
+        /// Skip confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Dry run (don't actually publish)
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -158,7 +184,9 @@ fn main() -> ExitCode {
         Commands::Clean => run_clean().map_err(GotganError::from),
         Commands::Tree { all } => run_tree(all).map_err(GotganError::from),
         Commands::Update => run_update().map_err(GotganError::from),
-        Commands::Add { name, path, dev } => run_add(&name, path, dev).map_err(GotganError::from),
+        Commands::Add { name, path, version, dev } => run_add(&name, path, version, dev).map_err(GotganError::from),
+        Commands::Search { query, limit } => run_search(&query, limit).map_err(GotganError::from),
+        Commands::Publish { yes, dry_run } => run_publish(yes, dry_run).map_err(GotganError::from),
     };
 
     match result {

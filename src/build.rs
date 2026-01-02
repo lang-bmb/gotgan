@@ -559,8 +559,9 @@ pub fn run_update() -> Result<(), BuildError> {
 }
 
 /// Add a dependency to the project
-pub fn run_add(name: &str, path: Option<String>, dev: bool) -> Result<(), BuildError> {
+pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: bool) -> Result<(), BuildError> {
     use crate::config::{Dependency, DetailedDependency};
+    use crate::registry::RegistryClient;
 
     let current = std::env::current_dir()?;
     let root = find_project_root(&current).ok_or(BuildError::NotInProject)?;
@@ -584,20 +585,43 @@ pub fn run_add(name: &str, path: Option<String>, dev: bool) -> Result<(), BuildE
     }
 
     // Create dependency entry
-    let dep = if let Some(ref dep_path) = path {
-        Dependency::Detailed(DetailedDependency {
+    let (dep, version_str) = if let Some(ref dep_path) = path {
+        // Local path dependency
+        (Dependency::Detailed(DetailedDependency {
             version: None,
             path: Some(dep_path.clone()),
             git: None,
             branch: None,
             features: Vec::new(),
             optional: false,
-        })
+        }), None)
     } else {
-        // For now, path is required (no registry support yet)
-        return Err(BuildError::CompilerError(
-            "Path is required for local dependencies. Use: gotgan add <name> --path <path>".to_string(),
-        ));
+        // Remote registry dependency
+        let registry = RegistryClient::new();
+
+        let resolved_version = match &version {
+            Some(v) => v.clone(),
+            None => {
+                // Try to get latest version from registry
+                match registry.get_latest_version(name) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        // If registry lookup fails, use a placeholder
+                        eprintln!("   Note: Package '{}' not found in registry, using version '*'", name);
+                        "*".to_string()
+                    }
+                }
+            }
+        };
+
+        (Dependency::Detailed(DetailedDependency {
+            version: Some(resolved_version.clone()),
+            path: None,
+            git: None,
+            branch: None,
+            features: Vec::new(),
+            optional: false,
+        }), Some(resolved_version))
     };
 
     // Add to manifest
@@ -615,9 +639,137 @@ pub fn run_add(name: &str, path: Option<String>, dev: bool) -> Result<(), BuildE
 
     if let Some(ref p) = path {
         println!("        Path: {}", p);
+    } else if let Some(v) = version_str {
+        println!("        Version: {}", v);
     }
 
     Ok(())
+}
+
+/// Search for packages in the registry
+pub fn run_search(query: &str, limit: usize) -> Result<(), BuildError> {
+    use crate::registry::RegistryClient;
+
+    println!("    Searching for '{}'...", query);
+
+    let registry = RegistryClient::new();
+    let results = registry.search(query).map_err(|e| BuildError::CompilerError(e.to_string()))?;
+
+    if results.is_empty() {
+        println!("   No packages found matching '{}'", query);
+        println!("");
+        println!("   Note: The BMB package registry is still being set up.");
+        println!("         Once available, packages will be listed here.");
+        return Ok(());
+    }
+
+    println!("");
+    println!("   Found {} package(s):", results.len().min(limit));
+    println!("");
+
+    for result in results.iter().take(limit) {
+        println!("   {} ({})", result.name, result.latest_version);
+        if let Some(ref desc) = result.description {
+            println!("       {}", desc);
+        }
+        println!("");
+    }
+
+    Ok(())
+}
+
+/// Publish a package to the registry
+pub fn run_publish(skip_confirm: bool, dry_run: bool) -> Result<(), BuildError> {
+    use crate::registry::{create_package_archive, generate_package_info};
+    use std::io::{self, Write};
+
+    let ctx = ProjectContext::find()?;
+    let manifest = &ctx.manifest;
+
+    println!(
+        "   Publishing {} v{}",
+        manifest.package.name, manifest.package.version
+    );
+
+    // Validate package metadata
+    if manifest.package.description.is_none() {
+        eprintln!("   Warning: 'description' is recommended for published packages");
+    }
+    if manifest.package.license.is_none() {
+        eprintln!("   Warning: 'license' is recommended for published packages");
+    }
+    if manifest.package.repository.is_none() {
+        eprintln!("   Warning: 'repository' is recommended for published packages");
+    }
+
+    // Create package archive
+    let archive_name = format!("{}-{}.tar.gz", manifest.package.name, manifest.package.version);
+    let archive_path = ctx.target_dir.join(&archive_name);
+
+    std::fs::create_dir_all(&ctx.target_dir)?;
+
+    println!("   Creating archive: {}", archive_name);
+    create_package_archive(&ctx.root, &archive_path)
+        .map_err(|e| BuildError::CompilerError(e.to_string()))?;
+
+    // Calculate checksum
+    let archive_bytes = std::fs::read(&archive_path)?;
+    let checksum = simple_sha256_hex(&archive_bytes);
+    println!("   Checksum: {}", &checksum[..16]);
+
+    // Generate package info for registry
+    let package_info = generate_package_info(manifest, &checksum);
+    let package_json = serde_json::to_string_pretty(&package_info)
+        .map_err(|e| BuildError::CompilerError(e.to_string()))?;
+
+    if dry_run {
+        println!("");
+        println!("   [DRY RUN] Would publish with the following metadata:");
+        println!("{}", package_json);
+        println!("");
+        println!("   Archive created at: {}", archive_path.display());
+        return Ok(());
+    }
+
+    // Confirm with user
+    if !skip_confirm {
+        print!("   Publish {} v{}? [y/N]: ", manifest.package.name, manifest.package.version);
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("   Cancelled");
+            return Ok(());
+        }
+    }
+
+    // For now, show instructions for manual publishing
+    println!("");
+    println!("   To publish to the BMB registry:");
+    println!("");
+    println!("   1. Create a GitHub release in lang-bmb/registry");
+    println!("   2. Upload: {}", archive_path.display());
+    println!("   3. Add to registry index.json:");
+    println!("");
+    println!("{}", package_json);
+    println!("");
+    println!("   Note: Automated publishing will be available in a future version.");
+
+    Ok(())
+}
+
+/// Simple SHA-256 hash (placeholder - uses basic hash for now)
+fn simple_sha256_hex(data: &[u8]) -> String {
+    // Simple hash for demonstration (not cryptographically secure)
+    // In production, use sha2 crate
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in data {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}{:016x}{:016x}{:016x}", hash, hash.rotate_left(16), hash.rotate_left(32), hash.rotate_left(48))
 }
 
 #[cfg(test)]
