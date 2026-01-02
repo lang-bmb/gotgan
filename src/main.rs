@@ -13,7 +13,7 @@ mod lock;
 mod project;
 mod resolver;
 
-use build::{run_build, run_check, run_clean, run_run, run_test, run_tree, run_update, run_verify, BuildOptions};
+use build::{run_add, run_build, run_check, run_clean, run_run, run_test, run_tree, run_update, run_verify, BuildOptions};
 use error::GotganError;
 use project::{create_project, init_project};
 
@@ -107,6 +107,20 @@ enum Commands {
 
     /// Update dependencies and regenerate lock file
     Update,
+
+    /// Add a dependency to the project
+    Add {
+        /// Dependency name
+        name: String,
+
+        /// Path to local dependency
+        #[arg(short, long)]
+        path: Option<String>,
+
+        /// Add as dev dependency
+        #[arg(long)]
+        dev: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -144,6 +158,7 @@ fn main() -> ExitCode {
         Commands::Clean => run_clean().map_err(GotganError::from),
         Commands::Tree { all } => run_tree(all).map_err(GotganError::from),
         Commands::Update => run_update().map_err(GotganError::from),
+        Commands::Add { name, path, dev } => run_add(&name, path, dev).map_err(GotganError::from),
     };
 
     match result {

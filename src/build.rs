@@ -558,6 +558,68 @@ pub fn run_update() -> Result<(), BuildError> {
     Ok(())
 }
 
+/// Add a dependency to the project
+pub fn run_add(name: &str, path: Option<String>, dev: bool) -> Result<(), BuildError> {
+    use crate::config::{Dependency, DetailedDependency};
+
+    let current = std::env::current_dir()?;
+    let root = find_project_root(&current).ok_or(BuildError::NotInProject)?;
+
+    let manifest_path = root.join("gotgan.toml");
+    let mut manifest = Manifest::load(&manifest_path)?;
+
+    // Check if dependency already exists
+    let deps = if dev {
+        &manifest.dev_dependencies
+    } else {
+        &manifest.dependencies
+    };
+
+    if deps.contains_key(name) {
+        eprintln!(
+            "   Warning: {} '{}' already exists, updating",
+            if dev { "Dev dependency" } else { "Dependency" },
+            name
+        );
+    }
+
+    // Create dependency entry
+    let dep = if let Some(ref dep_path) = path {
+        Dependency::Detailed(DetailedDependency {
+            version: None,
+            path: Some(dep_path.clone()),
+            git: None,
+            branch: None,
+            features: Vec::new(),
+            optional: false,
+        })
+    } else {
+        // For now, path is required (no registry support yet)
+        return Err(BuildError::CompilerError(
+            "Path is required for local dependencies. Use: gotgan add <name> --path <path>".to_string(),
+        ));
+    };
+
+    // Add to manifest
+    if dev {
+        manifest.dev_dependencies.insert(name.to_string(), dep);
+    } else {
+        manifest.dependencies.insert(name.to_string(), dep);
+    }
+
+    // Save manifest
+    manifest.save(&manifest_path)?;
+
+    let dep_type = if dev { "dev-dependency" } else { "dependency" };
+    println!("      Adding {} as {}", name, dep_type);
+
+    if let Some(ref p) = path {
+        println!("        Path: {}", p);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
