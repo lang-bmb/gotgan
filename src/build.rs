@@ -3,6 +3,7 @@
 //! Wraps the bmb compiler to build, run, check, verify, and test BMB projects.
 
 use crate::config::{ConfigError, Manifest};
+use crate::lock::{LockError, LockFile, LOCK_FILE_NAME};
 use crate::resolver::{DependencyResolver, ResolveError, ResolvedDep};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,6 +45,9 @@ pub enum BuildError {
 
     #[error("Dependency error: {0}")]
     ResolveError(#[from] ResolveError),
+
+    #[error("Lock file error: {0}")]
+    LockError(#[from] LockError),
 }
 
 /// Project context loaded from gotgan.toml
@@ -53,6 +57,8 @@ pub struct ProjectContext {
     pub src_dir: PathBuf,
     pub target_dir: PathBuf,
     pub dependencies: Vec<ResolvedDep>,
+    /// Whether the lock file was up to date
+    pub lock_up_to_date: bool,
 }
 
 impl ProjectContext {
@@ -79,13 +85,33 @@ impl ProjectContext {
             );
         }
 
+        // Check lock file
+        let lock_path = root.join(LOCK_FILE_NAME);
+        let lock_up_to_date = if lock_path.exists() {
+            match LockFile::load(&lock_path) {
+                Ok(lock) => lock.matches(&dependencies),
+                Err(_) => false,
+            }
+        } else {
+            false
+        };
+
         Ok(Self {
             root,
             manifest,
             src_dir,
             target_dir,
             dependencies,
+            lock_up_to_date,
         })
+    }
+
+    /// Save lock file for current dependencies
+    pub fn save_lock_file(&self) -> Result<(), BuildError> {
+        let lock = LockFile::from_resolved(&self.dependencies);
+        let lock_path = self.root.join(LOCK_FILE_NAME);
+        lock.save(&lock_path)?;
+        Ok(())
     }
 
     /// Get the main entry point file
@@ -275,6 +301,12 @@ pub fn run_build(opts: BuildOptions) -> Result<(), BuildError> {
     }
 
     run_bmb(&args)?;
+
+    // Update lock file if needed
+    if !ctx.lock_up_to_date && !ctx.dependencies.is_empty() {
+        ctx.save_lock_file()?;
+        println!("   Updated {}", LOCK_FILE_NAME);
+    }
 
     println!("   Finished {} target", if opts.release { "release" } else { "debug" });
     println!("   Binary: {}", output.display());
@@ -488,6 +520,41 @@ pub fn run_tree(show_all: bool) -> Result<(), BuildError> {
         }
     }
 
+    Ok(())
+}
+
+/// Update dependencies and regenerate lock file
+pub fn run_update() -> Result<(), BuildError> {
+    let ctx = ProjectContext::find()?;
+
+    println!(
+        "   Updating {} v{}",
+        ctx.manifest.package.name, ctx.manifest.package.version
+    );
+
+    if ctx.dependencies.is_empty() {
+        println!("   No dependencies to lock");
+        return Ok(());
+    }
+
+    // Always regenerate lock file
+    ctx.save_lock_file()?;
+
+    println!(
+        "   Locked {} {}",
+        ctx.dependencies.len(),
+        if ctx.dependencies.len() == 1 {
+            "dependency"
+        } else {
+            "dependencies"
+        }
+    );
+
+    for dep in &ctx.dependencies {
+        println!("   - {} v{}", dep.name, dep.version);
+    }
+
+    println!("   Updated {}", LOCK_FILE_NAME);
     Ok(())
 }
 

@@ -9,10 +9,11 @@ use std::process::ExitCode;
 mod build;
 mod config;
 mod error;
+mod lock;
 mod project;
 mod resolver;
 
-use build::{run_build, run_check, run_clean, run_run, run_test, run_tree, run_verify, BuildOptions};
+use build::{run_build, run_check, run_clean, run_run, run_test, run_tree, run_update, run_verify, BuildOptions};
 use error::GotganError;
 use project::{create_project, init_project};
 
@@ -103,6 +104,9 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
     },
+
+    /// Update dependencies and regenerate lock file
+    Update,
 }
 
 fn main() -> ExitCode {
@@ -139,6 +143,7 @@ fn main() -> ExitCode {
         Commands::Test { filter, verbose } => run_test(filter, verbose).map_err(GotganError::from),
         Commands::Clean => run_clean().map_err(GotganError::from),
         Commands::Tree { all } => run_tree(all).map_err(GotganError::from),
+        Commands::Update => run_update().map_err(GotganError::from),
     };
 
     match result {
