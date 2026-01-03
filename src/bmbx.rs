@@ -7,9 +7,13 @@
 //! - src/: Source code
 //! - bin/: Compiled binaries (multi-target)
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tar::Builder;
 
 use crate::error::GotganError;
 
@@ -576,6 +580,116 @@ impl BmbxBundle {
 
         Ok(())
     }
+
+    /// Write bundle as a single .bmbx file (tar.gz archive)
+    pub fn write_single_file(&self, output_path: &Path) -> Result<(), GotganError> {
+        let project_dir = self.manifest_path.parent()
+            .ok_or_else(|| GotganError::Bundle("Invalid manifest path".to_string()))?;
+
+        // Create output directory if needed
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Create tar.gz archive
+        let file = File::create(output_path)?;
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+
+        // Add manifest.toml (copy of gotgan.toml)
+        let manifest_content = fs::read_to_string(&self.manifest_path)?;
+        Self::add_bytes_to_archive(&mut archive, "manifest.toml", manifest_content.as_bytes())?;
+
+        // Add contracts.json
+        let contracts_json = serde_json::to_string_pretty(&self.contracts)?;
+        Self::add_bytes_to_archive(&mut archive, "contracts.json", contracts_json.as_bytes())?;
+
+        // Add symbols.json
+        let symbols_json = serde_json::to_string_pretty(&self.symbols)?;
+        Self::add_bytes_to_archive(&mut archive, "symbols.json", symbols_json.as_bytes())?;
+
+        // Add types.json
+        let types_json = serde_json::to_string_pretty(&self.types)?;
+        Self::add_bytes_to_archive(&mut archive, "types.json", types_json.as_bytes())?;
+
+        // Add src/ directory
+        let src_dir = project_dir.join("src");
+        if src_dir.exists() {
+            Self::add_directory_to_archive(&mut archive, &src_dir, "src")?;
+        }
+
+        // Also check for lib.bmb or main.bmb at project root
+        for entry_file in &["lib.bmb", "main.bmb"] {
+            let path = project_dir.join(entry_file);
+            if path.exists() {
+                let content = fs::read_to_string(&path)?;
+                Self::add_bytes_to_archive(&mut archive, entry_file, content.as_bytes())?;
+            }
+        }
+
+        // Finish the archive
+        let encoder = archive.into_inner()?;
+        encoder.finish()?;
+
+        println!("✓ Generated single-file bundle: {:?}", output_path);
+        println!("  Package: {} v{}", self.package_name, self.version);
+        println!("  Contracts: {} functions, {} types",
+            self.contracts.functions.len(),
+            self.contracts.types.len()
+        );
+        println!("  Exports: {} symbols", self.symbols.exports.len());
+
+        Ok(())
+    }
+
+    /// Add bytes to tar archive with a given path
+    fn add_bytes_to_archive<W: Write>(
+        archive: &mut Builder<W>,
+        path: &str,
+        data: &[u8],
+    ) -> Result<(), GotganError> {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(path)?;
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_mtime(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        );
+        header.set_cksum();
+
+        archive.append(&header, data)?;
+        Ok(())
+    }
+
+    /// Recursively add a directory to tar archive
+    fn add_directory_to_archive<W: Write>(
+        archive: &mut Builder<W>,
+        dir_path: &Path,
+        archive_prefix: &str,
+    ) -> Result<(), GotganError> {
+        if !dir_path.is_dir() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(dir_path)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let archive_path = format!("{}/{}", archive_prefix, file_name.to_string_lossy());
+
+            if path.is_dir() {
+                Self::add_directory_to_archive(archive, &path, &archive_path)?;
+            } else if path.extension().map_or(false, |e| e == "bmb") {
+                let content = fs::read_to_string(&path)?;
+                Self::add_bytes_to_archive(archive, &archive_path, content.as_bytes())?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // ============================================
@@ -695,17 +809,21 @@ pub fn run_bundle(
     // Create bundle from current project
     let bundle = BmbxBundle::from_project(&current_dir)?;
 
-    // Determine output directory
-    let output_dir = output.unwrap_or_else(|| current_dir.join("target").join("bmbx"));
-
-    // Write bundle files
-    bundle.write_to(&output_dir)?;
-
-    println!("\n✓ BMBX bundle generated at {:?}", output_dir);
-    println!("  Package: {} v{}", bundle.package_name, bundle.version);
-
     if single_file {
-        println!("\nNote: --single-file bundling not yet implemented");
+        // Single-file mode: create .bmbx archive
+        let output_path = output.unwrap_or_else(|| {
+            current_dir
+                .join("target")
+                .join("bmbx")
+                .join(format!("{}-{}.bmbx", bundle.package_name, bundle.version))
+        });
+        bundle.write_single_file(&output_path)?;
+    } else {
+        // Directory mode: create separate files
+        let output_dir = output.unwrap_or_else(|| current_dir.join("target").join("bmbx"));
+        bundle.write_to(&output_dir)?;
+        println!("\n✓ BMBX bundle generated at {:?}", output_dir);
+        println!("  Package: {} v{}", bundle.package_name, bundle.version);
     }
 
     Ok(())
