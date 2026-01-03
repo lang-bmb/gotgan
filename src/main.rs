@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod bmbx;
 mod build;
 mod config;
 mod error;
@@ -14,6 +15,7 @@ mod project;
 mod registry;
 mod resolver;
 
+use bmbx::{run_bundle, run_compat_check, run_explore};
 use build::{run_add, run_build, run_check, run_clean, run_publish, run_run, run_search, run_test, run_tree, run_update, run_verify, BuildOptions};
 use error::GotganError;
 use project::{create_project, init_project};
@@ -147,6 +149,55 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Create BMBX bundle with contracts, symbols, and types
+    Bundle {
+        /// Output directory for BMBX files
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Create single-file bundle (.bmbx)
+        #[arg(long)]
+        single_file: bool,
+    },
+
+    /// Explore package symbols and contracts (AI-Native discovery)
+    Explore {
+        /// Package path (defaults to current directory)
+        #[arg(short, long)]
+        path: Option<PathBuf>,
+
+        /// Show symbols index
+        #[arg(long)]
+        symbols: bool,
+
+        /// Show contracts
+        #[arg(long)]
+        contracts: bool,
+
+        /// Show types
+        #[arg(long)]
+        types: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Filter by function/type name pattern
+        #[arg(short, long)]
+        filter: Option<String>,
+    },
+
+    /// Check contract compatibility between versions
+    Compat {
+        /// Path to old contracts.json (or use saved target/bmbx/contracts.json)
+        #[arg(long)]
+        old: Option<PathBuf>,
+
+        /// Path to new contracts.json (or generate from current project)
+        #[arg(long)]
+        new: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -187,6 +238,11 @@ fn main() -> ExitCode {
         Commands::Add { name, path, version, dev } => run_add(&name, path, version, dev).map_err(GotganError::from),
         Commands::Search { query, limit } => run_search(&query, limit).map_err(GotganError::from),
         Commands::Publish { yes, dry_run } => run_publish(yes, dry_run).map_err(GotganError::from),
+        Commands::Bundle { output, single_file } => run_bundle(output, single_file),
+        Commands::Explore { path, symbols, contracts, types, json, filter } => {
+            run_explore(path, symbols, contracts, types, json, filter)
+        }
+        Commands::Compat { old, new } => run_compat_check(old, new),
     };
 
     match result {
