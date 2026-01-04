@@ -127,6 +127,10 @@ enum Commands {
         /// Add as dev dependency
         #[arg(long)]
         dev: bool,
+
+        /// Use local registry (~/.gotgan/registry/)
+        #[arg(long)]
+        local: bool,
     },
 
     /// Search for packages in the registry
@@ -148,6 +152,10 @@ enum Commands {
         /// Dry run (don't actually publish)
         #[arg(long)]
         dry_run: bool,
+
+        /// Publish to local registry (~/.gotgan/registry/)
+        #[arg(long)]
+        local: bool,
     },
 
     /// Create BMBX bundle with contracts, symbols, and types
@@ -235,9 +243,9 @@ fn main() -> ExitCode {
         Commands::Clean => run_clean().map_err(GotganError::from),
         Commands::Tree { all } => run_tree(all).map_err(GotganError::from),
         Commands::Update => run_update().map_err(GotganError::from),
-        Commands::Add { name, path, version, dev } => run_add(&name, path, version, dev).map_err(GotganError::from),
+        Commands::Add { name, path, version, dev, local } => run_add(&name, path, version, dev, local).map_err(GotganError::from),
         Commands::Search { query, limit } => run_search(&query, limit).map_err(GotganError::from),
-        Commands::Publish { yes, dry_run } => run_publish(yes, dry_run).map_err(GotganError::from),
+        Commands::Publish { yes, dry_run, local } => run_publish(yes, dry_run, local).map_err(GotganError::from),
         Commands::Bundle { output, single_file } => run_bundle(output, single_file),
         Commands::Explore { path, symbols, contracts, types, json, filter } => {
             run_explore(path, symbols, contracts, types, json, filter)

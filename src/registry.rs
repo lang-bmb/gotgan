@@ -1,6 +1,6 @@
-//! Remote package registry client
+//! Package registry clients
 //!
-//! Supports GitHub-based package registry for BMB packages.
+//! Supports both local and remote (GitHub-based) package registries for BMB packages.
 
 use crate::config::{Dependency, DetailedDependency, Manifest};
 use flate2::read::GzDecoder;
@@ -40,6 +40,12 @@ pub enum RegistryError {
 
     #[error("Archive error: {0}")]
     ArchiveError(String),
+
+    #[error("Version already exists: {0}@{1}")]
+    VersionAlreadyExists(String, String),
+
+    #[error("Invalid semver: {0}")]
+    InvalidSemver(String),
 }
 
 /// Package metadata in the registry index
@@ -239,6 +245,293 @@ impl Default for RegistryClient {
     }
 }
 
+// ============================================================================
+// LocalRegistry - Local package registry for offline development
+// ============================================================================
+
+/// Local package registry for offline package management
+///
+/// Structure:
+/// ```text
+/// ~/.gotgan/
+/// ├── registry/
+/// │   ├── index.json           # Local package index
+/// │   ├── bmb-json/
+/// │   │   ├── 0.1.0/           # Version directory
+/// │   │   │   ├── gotgan.toml
+/// │   │   │   └── src/
+/// │   │   └── 0.2.0/
+/// │   └── bmb-regex/
+/// └── cache/                   # Downloaded package cache
+/// ```
+pub struct LocalRegistry {
+    registry_dir: PathBuf,
+}
+
+impl LocalRegistry {
+    /// Create a new local registry at ~/.gotgan/registry/
+    pub fn new() -> Self {
+        let registry_dir = dirs_home_dir().join(".gotgan").join("registry");
+        fs::create_dir_all(&registry_dir).ok();
+        Self { registry_dir }
+    }
+
+    /// Create a local registry at a custom path
+    pub fn with_path(registry_dir: PathBuf) -> Self {
+        fs::create_dir_all(&registry_dir).ok();
+        Self { registry_dir }
+    }
+
+    /// Get the registry directory path
+    pub fn registry_dir(&self) -> &Path {
+        &self.registry_dir
+    }
+
+    /// Load the local registry index
+    pub fn load_index(&self) -> Result<RegistryIndex, RegistryError> {
+        let index_path = self.registry_dir.join("index.json");
+        if !index_path.exists() {
+            return Ok(RegistryIndex {
+                packages: HashMap::new(),
+                last_updated: chrono_now(),
+            });
+        }
+
+        let content = fs::read_to_string(&index_path)?;
+        let index: RegistryIndex = serde_json::from_str(&content)?;
+        Ok(index)
+    }
+
+    /// Save the local registry index
+    fn save_index(&self, index: &RegistryIndex) -> Result<(), RegistryError> {
+        let index_path = self.registry_dir.join("index.json");
+        let content = serde_json::to_string_pretty(index)?;
+        fs::write(&index_path, content)?;
+        Ok(())
+    }
+
+    /// Publish a package to the local registry
+    pub fn publish(&self, project_dir: &Path, manifest: &Manifest, checksum: &str) -> Result<PathBuf, RegistryError> {
+        let name = &manifest.package.name;
+        let version = &manifest.package.version;
+
+        // Create package directory: ~/.gotgan/registry/{name}/{version}/
+        let package_dir = self.registry_dir.join(name).join(version);
+
+        // Check if version already exists
+        if package_dir.exists() {
+            return Err(RegistryError::VersionAlreadyExists(
+                name.clone(),
+                version.clone(),
+            ));
+        }
+
+        fs::create_dir_all(&package_dir)?;
+
+        // Copy source files to package directory
+        copy_package_files(project_dir, &package_dir)?;
+
+        // Update local index
+        let mut index = self.load_index()?;
+
+        let version_info = VersionInfo {
+            version: version.clone(),
+            checksum: checksum.to_string(),
+            published_at: chrono_now(),
+            download_url: format!("file://{}", package_dir.display()),
+            dependencies: manifest
+                .dependencies
+                .iter()
+                .filter_map(|(name, dep)| {
+                    let version = match dep {
+                        Dependency::Simple(v) => Some(v.clone()),
+                        Dependency::Detailed(d) => d.version.clone(),
+                    };
+                    version.map(|v| (name.clone(), v))
+                })
+                .collect(),
+        };
+
+        if let Some(pkg_info) = index.packages.get_mut(name) {
+            // Add new version to existing package
+            pkg_info.versions.insert(0, version_info);
+        } else {
+            // Create new package entry
+            let pkg_info = PackageInfo {
+                name: name.clone(),
+                description: manifest.package.description.clone(),
+                versions: vec![version_info],
+                repository: manifest.package.repository.clone(),
+                license: manifest.package.license.clone(),
+                keywords: None,
+            };
+            index.packages.insert(name.clone(), pkg_info);
+        }
+
+        index.last_updated = chrono_now();
+        self.save_index(&index)?;
+
+        Ok(package_dir)
+    }
+
+    /// Get package information from local registry
+    pub fn get_package(&self, name: &str) -> Result<PackageInfo, RegistryError> {
+        let index = self.load_index()?;
+        index
+            .packages
+            .get(name)
+            .cloned()
+            .ok_or_else(|| RegistryError::PackageNotFound(name.to_string()))
+    }
+
+    /// Get the latest version of a package from local registry
+    pub fn get_latest_version(&self, name: &str) -> Result<String, RegistryError> {
+        let info = self.get_package(name)?;
+        info.versions
+            .first()
+            .map(|v| v.version.clone())
+            .ok_or_else(|| RegistryError::VersionNotFound(name.to_string(), "latest".to_string()))
+    }
+
+    /// List all versions of a package, sorted by semver (newest first)
+    pub fn list_versions(&self, name: &str) -> Result<Vec<String>, RegistryError> {
+        let info = self.get_package(name)?;
+        let mut versions: Vec<String> = info.versions.iter().map(|v| v.version.clone()).collect();
+
+        // Sort by semver (descending)
+        versions.sort_by(|a, b| compare_semver(b, a));
+
+        Ok(versions)
+    }
+
+    /// Get the package directory path for a specific version
+    pub fn get_package_path(&self, name: &str, version: &str) -> Result<PathBuf, RegistryError> {
+        let package_dir = self.registry_dir.join(name).join(version);
+        if !package_dir.exists() {
+            return Err(RegistryError::VersionNotFound(
+                name.to_string(),
+                version.to_string(),
+            ));
+        }
+        Ok(package_dir)
+    }
+
+    /// Search for packages in local registry
+    pub fn search(&self, query: &str) -> Result<Vec<SearchResult>, RegistryError> {
+        let index = self.load_index()?;
+        let query_lower = query.to_lowercase();
+
+        let results: Vec<SearchResult> = index
+            .packages
+            .iter()
+            .filter(|(name, info)| {
+                name.to_lowercase().contains(&query_lower)
+                    || info
+                        .description
+                        .as_ref()
+                        .map(|d| d.to_lowercase().contains(&query_lower))
+                        .unwrap_or(false)
+            })
+            .map(|(_, info)| SearchResult {
+                name: info.name.clone(),
+                description: info.description.clone(),
+                latest_version: info
+                    .versions
+                    .first()
+                    .map(|v| v.version.clone())
+                    .unwrap_or_else(|| "0.0.0".to_string()),
+                downloads: None,
+            })
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Find the best matching version for a constraint
+    ///
+    /// Supports:
+    /// - Exact: "1.0.0"
+    /// - Caret: "^1.0.0" (>=1.0.0 <2.0.0)
+    /// - Tilde: "~1.0.0" (>=1.0.0 <1.1.0)
+    /// - Wildcard: "*" (any version)
+    /// - Range: ">=1.0.0" (greater or equal)
+    pub fn resolve_version(&self, name: &str, constraint: &str) -> Result<String, RegistryError> {
+        let versions = self.list_versions(name)?;
+
+        if versions.is_empty() {
+            return Err(RegistryError::VersionNotFound(
+                name.to_string(),
+                constraint.to_string(),
+            ));
+        }
+
+        // Handle wildcard
+        if constraint == "*" {
+            return Ok(versions.first().unwrap().clone());
+        }
+
+        // Parse constraint
+        let (op, version_str) = parse_version_constraint(constraint);
+
+        for version in &versions {
+            if matches_constraint(version, &op, &version_str) {
+                return Ok(version.clone());
+            }
+        }
+
+        Err(RegistryError::VersionNotFound(
+            name.to_string(),
+            constraint.to_string(),
+        ))
+    }
+
+    /// Remove a specific version from the local registry
+    pub fn remove_version(&self, name: &str, version: &str) -> Result<(), RegistryError> {
+        let package_dir = self.registry_dir.join(name).join(version);
+
+        if !package_dir.exists() {
+            return Err(RegistryError::VersionNotFound(
+                name.to_string(),
+                version.to_string(),
+            ));
+        }
+
+        // Remove the version directory
+        fs::remove_dir_all(&package_dir)?;
+
+        // Update index
+        let mut index = self.load_index()?;
+        if let Some(pkg_info) = index.packages.get_mut(name) {
+            pkg_info.versions.retain(|v| v.version != version);
+
+            // Remove package entry if no versions left
+            if pkg_info.versions.is_empty() {
+                index.packages.remove(name);
+                // Also remove the package directory
+                let pkg_dir = self.registry_dir.join(name);
+                if pkg_dir.exists() {
+                    fs::remove_dir_all(&pkg_dir)?;
+                }
+            }
+        }
+
+        index.last_updated = chrono_now();
+        self.save_index(&index)?;
+
+        Ok(())
+    }
+}
+
+impl Default for LocalRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
 /// Create a package archive from a project directory
 pub fn create_package_archive(project_dir: &Path, output_path: &Path) -> Result<(), RegistryError> {
     let manifest_path = project_dir.join("gotgan.toml");
@@ -333,7 +626,19 @@ pub fn resolve_registry_dependency(name: &str, version: &str) -> Dependency {
     })
 }
 
-// Helper functions
+/// Resolve a local registry dependency
+pub fn resolve_local_dependency(name: &str, version: &str, local_path: &Path) -> Dependency {
+    Dependency::Detailed(DetailedDependency {
+        version: Some(version.to_string()),
+        path: Some(local_path.to_string_lossy().to_string()),
+        git: None,
+        branch: None,
+        features: Vec::new(),
+        optional: false,
+    })
+}
+
+// Private helper functions
 
 fn dirs_cache_dir() -> PathBuf {
     std::env::var("HOME")
@@ -341,6 +646,13 @@ fn dirs_cache_dir() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
         .join(".cache")
+}
+
+fn dirs_home_dir() -> PathBuf {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir())
 }
 
 fn chrono_now() -> String {
@@ -379,6 +691,115 @@ fn walk_dir_recursive(dir: &Path, results: &mut Vec<PathBuf>) -> Result<(), io::
     Ok(())
 }
 
+/// Copy package files to target directory
+fn copy_package_files(src: &Path, dst: &Path) -> Result<(), RegistryError> {
+    for entry in walkdir_simple(src)? {
+        let relative_path = entry.strip_prefix(src).unwrap_or(&entry);
+
+        // Skip target directory and hidden files
+        let relative_str = relative_path.to_string_lossy();
+        if relative_str.starts_with("target")
+            || relative_str.starts_with('.')
+            || relative_str.contains("/.")
+        {
+            continue;
+        }
+
+        // Include .bmb files, gotgan.toml, README, LICENSE
+        let include = relative_str.ends_with(".bmb")
+            || relative_str == "gotgan.toml"
+            || relative_str.starts_with("README")
+            || relative_str.starts_with("LICENSE")
+            || relative_str.starts_with("src/");
+
+        if include && entry.is_file() {
+            let dst_path = dst.join(relative_path);
+            if let Some(parent) = dst_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(&entry, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Compare two semver strings
+/// Returns: Ordering (Less, Equal, Greater)
+fn compare_semver(a: &str, b: &str) -> std::cmp::Ordering {
+    let parse = |s: &str| -> (u64, u64, u64) {
+        let parts: Vec<&str> = s.split('.').collect();
+        let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.get(2).and_then(|p| p.split('-').next()?.parse().ok()).unwrap_or(0);
+        (major, minor, patch)
+    };
+
+    let a_ver = parse(a);
+    let b_ver = parse(b);
+
+    a_ver.cmp(&b_ver)
+}
+
+/// Parse version constraint into operator and version
+fn parse_version_constraint(constraint: &str) -> (String, String) {
+    let constraint = constraint.trim();
+
+    if constraint.starts_with('^') {
+        ("^".to_string(), constraint[1..].to_string())
+    } else if constraint.starts_with('~') {
+        ("~".to_string(), constraint[1..].to_string())
+    } else if constraint.starts_with(">=") {
+        (">=".to_string(), constraint[2..].to_string())
+    } else if constraint.starts_with("<=") {
+        ("<=".to_string(), constraint[2..].to_string())
+    } else if constraint.starts_with('>') {
+        (">".to_string(), constraint[1..].to_string())
+    } else if constraint.starts_with('<') {
+        ("<".to_string(), constraint[1..].to_string())
+    } else if constraint.starts_with('=') {
+        ("=".to_string(), constraint[1..].to_string())
+    } else {
+        // Exact version
+        ("=".to_string(), constraint.to_string())
+    }
+}
+
+/// Check if a version matches a constraint
+fn matches_constraint(version: &str, op: &str, constraint_ver: &str) -> bool {
+    let parse = |s: &str| -> (u64, u64, u64) {
+        let parts: Vec<&str> = s.split('.').collect();
+        let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let minor = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.get(2).and_then(|p| p.split('-').next()?.parse().ok()).unwrap_or(0);
+        (major, minor, patch)
+    };
+
+    let v = parse(version);
+    let c = parse(constraint_ver);
+
+    match op {
+        "=" => v == c,
+        ">" => v > c,
+        "<" => v < c,
+        ">=" => v >= c,
+        "<=" => v <= c,
+        "^" => {
+            // ^1.2.3 means >=1.2.3 <2.0.0 (for major > 0)
+            // ^0.2.3 means >=0.2.3 <0.3.0 (for major == 0)
+            if c.0 == 0 {
+                v.0 == c.0 && v.1 == c.1 && v.2 >= c.2
+            } else {
+                v.0 == c.0 && (v.1 > c.1 || (v.1 == c.1 && v.2 >= c.2))
+            }
+        }
+        "~" => {
+            // ~1.2.3 means >=1.2.3 <1.3.0
+            v.0 == c.0 && v.1 == c.1 && v.2 >= c.2
+        }
+        _ => v == c,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +819,49 @@ mod tests {
             }
             _ => panic!("Expected detailed dependency"),
         }
+    }
+
+    #[test]
+    fn test_compare_semver() {
+        assert_eq!(compare_semver("1.0.0", "1.0.0"), std::cmp::Ordering::Equal);
+        assert_eq!(compare_semver("1.0.1", "1.0.0"), std::cmp::Ordering::Greater);
+        assert_eq!(compare_semver("1.0.0", "1.0.1"), std::cmp::Ordering::Less);
+        assert_eq!(compare_semver("2.0.0", "1.9.9"), std::cmp::Ordering::Greater);
+        assert_eq!(compare_semver("1.10.0", "1.9.0"), std::cmp::Ordering::Greater);
+    }
+
+    #[test]
+    fn test_parse_version_constraint() {
+        assert_eq!(parse_version_constraint("^1.0.0"), ("^".to_string(), "1.0.0".to_string()));
+        assert_eq!(parse_version_constraint("~1.0.0"), ("~".to_string(), "1.0.0".to_string()));
+        assert_eq!(parse_version_constraint(">=1.0.0"), (">=".to_string(), "1.0.0".to_string()));
+        assert_eq!(parse_version_constraint("1.0.0"), ("=".to_string(), "1.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_matches_constraint() {
+        // Exact match
+        assert!(matches_constraint("1.0.0", "=", "1.0.0"));
+        assert!(!matches_constraint("1.0.1", "=", "1.0.0"));
+
+        // Caret (^)
+        assert!(matches_constraint("1.0.0", "^", "1.0.0"));
+        assert!(matches_constraint("1.2.3", "^", "1.0.0"));
+        assert!(!matches_constraint("2.0.0", "^", "1.0.0"));
+
+        // Tilde (~)
+        assert!(matches_constraint("1.0.0", "~", "1.0.0"));
+        assert!(matches_constraint("1.0.5", "~", "1.0.0"));
+        assert!(!matches_constraint("1.1.0", "~", "1.0.0"));
+
+        // Greater/Less
+        assert!(matches_constraint("1.1.0", ">=", "1.0.0"));
+        assert!(matches_constraint("0.9.0", "<", "1.0.0"));
+    }
+
+    #[test]
+    fn test_local_registry_new() {
+        let registry = LocalRegistry::new();
+        assert!(registry.registry_dir().ends_with("registry"));
     }
 }

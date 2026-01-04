@@ -13,6 +13,13 @@ BMB 패키지 매니저. Rust 폴백 생태계를 지원하고 Rust→BMB 마이
 - `gotgan test` - 테스트 실행
 - `gotgan verify` - 계약 검증 (BMB)
 - `gotgan publish` - 패키지 배포
+- `gotgan add <name>` - 의존성 추가
+
+### Local Registry
+- `gotgan publish --local` - 로컬 레지스트리에 패키지 게시
+- `gotgan add <name> --local` - 로컬 레지스트리에서 패키지 설치
+- Semver 기반 버전 관리 (^, ~, >=, <=, >, <, =, *)
+- 오프라인 패키지 캐싱
 
 ### Rust Fallback Ecosystem
 - **Cargo 호환**: Rust crates를 의존성으로 사용 가능
@@ -77,6 +84,32 @@ tokio = { version = "1", features = ["full"] }
 test-utils = "0.1"
 ```
 
+## Local Registry
+
+```bash
+# Publish package to local registry (~/.gotgan/registry/)
+gotgan publish --local
+
+# Add dependency from local registry
+gotgan add bmb-json --local
+
+# Add specific version
+gotgan add bmb-json --local --version "^1.0"
+```
+
+Registry structure:
+```
+~/.gotgan/
+├── registry/
+│   ├── bmb-json/
+│   │   ├── 1.0.0/
+│   │   │   ├── gotgan.toml
+│   │   │   └── src/
+│   │   └── index.json
+│   └── ...
+└── cache/
+```
+
 ## Rust Interop
 
 ### Using Rust Crates
@@ -110,14 +143,14 @@ gotgan verify src/
 
 ## Roadmap
 
-| Version | Features |
-|---------|----------|
-| v0.1 | Project structure, build, run |
-| v0.2 | Local dependencies, lock file |
-| v0.3 | Registry, publish, search |
-| v0.4 | Rust fallback ecosystem |
-| v0.5 | Migration tools |
-| v1.0 | Full feature set, BMB rewrite |
+| Version | Features | Status |
+|---------|----------|--------|
+| v0.1 | Project structure, build, run | ✅ 완료 |
+| v0.2 | Local dependencies, lock file | ✅ 완료 |
+| v0.3 | Local registry, publish, search | ✅ 완료 |
+| v0.4 | Rust fallback ecosystem | 계획 |
+| v0.5 | Migration tools | 계획 |
+| v1.0 | Full feature set, BMB rewrite | 계획 |
 
 ## Development
 

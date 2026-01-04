@@ -559,9 +559,9 @@ pub fn run_update() -> Result<(), BuildError> {
 }
 
 /// Add a dependency to the project
-pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: bool) -> Result<(), BuildError> {
+pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: bool, local: bool) -> Result<(), BuildError> {
     use crate::config::{Dependency, DetailedDependency};
-    use crate::registry::RegistryClient;
+    use crate::registry::{LocalRegistry, RegistryClient};
 
     let current = std::env::current_dir()?;
     let root = find_project_root(&current).ok_or(BuildError::NotInProject)?;
@@ -595,6 +595,49 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
             features: Vec::new(),
             optional: false,
         }), None)
+    } else if local {
+        // Local registry dependency
+        let local_registry = LocalRegistry::new();
+
+        let resolved_version = match &version {
+            Some(v) => {
+                // Resolve version constraint from local registry
+                match local_registry.resolve_version(name, v) {
+                    Ok(resolved) => resolved,
+                    Err(_) => {
+                        eprintln!("   Error: Package '{}' version '{}' not found in local registry", name, v);
+                        return Err(BuildError::CompilerError(format!(
+                            "Package '{}' version '{}' not found in local registry", name, v
+                        )));
+                    }
+                }
+            }
+            None => {
+                // Get latest version from local registry
+                match local_registry.get_latest_version(name) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        eprintln!("   Error: Package '{}' not found in local registry", name);
+                        return Err(BuildError::CompilerError(format!(
+                            "Package '{}' not found in local registry", name
+                        )));
+                    }
+                }
+            }
+        };
+
+        // Get package path from local registry
+        let package_path = local_registry.get_package_path(name, &resolved_version)
+            .map_err(|e| BuildError::CompilerError(e.to_string()))?;
+
+        (Dependency::Detailed(DetailedDependency {
+            version: Some(resolved_version.clone()),
+            path: Some(package_path.to_string_lossy().to_string()),
+            git: None,
+            branch: None,
+            features: Vec::new(),
+            optional: false,
+        }), Some(resolved_version))
     } else {
         // Remote registry dependency
         let registry = RegistryClient::new();
@@ -635,7 +678,8 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
     manifest.save(&manifest_path)?;
 
     let dep_type = if dev { "dev-dependency" } else { "dependency" };
-    println!("      Adding {} as {}", name, dep_type);
+    let registry_type = if local { " (local)" } else { "" };
+    println!("      Adding {} as {}{}", name, dep_type, registry_type);
 
     if let Some(ref p) = path {
         println!("        Path: {}", p);
@@ -679,16 +723,17 @@ pub fn run_search(query: &str, limit: usize) -> Result<(), BuildError> {
 }
 
 /// Publish a package to the registry
-pub fn run_publish(skip_confirm: bool, dry_run: bool) -> Result<(), BuildError> {
-    use crate::registry::{create_package_archive, generate_package_info};
+pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(), BuildError> {
+    use crate::registry::{create_package_archive, generate_package_info, LocalRegistry};
     use std::io::{self, Write};
 
     let ctx = ProjectContext::find()?;
     let manifest = &ctx.manifest;
 
+    let registry_type = if local { "local registry" } else { "registry" };
     println!(
-        "   Publishing {} v{}",
-        manifest.package.name, manifest.package.version
+        "   Publishing {} v{} to {}",
+        manifest.package.name, manifest.package.version, registry_type
     );
 
     // Validate package metadata
@@ -698,7 +743,7 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool) -> Result<(), BuildError> 
     if manifest.package.license.is_none() {
         eprintln!("   Warning: 'license' is recommended for published packages");
     }
-    if manifest.package.repository.is_none() {
+    if manifest.package.repository.is_none() && !local {
         eprintln!("   Warning: 'repository' is recommended for published packages");
     }
 
@@ -733,7 +778,7 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool) -> Result<(), BuildError> 
 
     // Confirm with user
     if !skip_confirm {
-        print!("   Publish {} v{}? [y/N]: ", manifest.package.name, manifest.package.version);
+        print!("   Publish {} v{} to {}? [y/N]: ", manifest.package.name, manifest.package.version, registry_type);
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -745,17 +790,36 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool) -> Result<(), BuildError> 
         }
     }
 
-    // For now, show instructions for manual publishing
-    println!("");
-    println!("   To publish to the BMB registry:");
-    println!("");
-    println!("   1. Create a GitHub release in lang-bmb/registry");
-    println!("   2. Upload: {}", archive_path.display());
-    println!("   3. Add to registry index.json:");
-    println!("");
-    println!("{}", package_json);
-    println!("");
-    println!("   Note: Automated publishing will be available in a future version.");
+    if local {
+        // Publish to local registry
+        let local_registry = LocalRegistry::new();
+
+        match local_registry.publish(&ctx.root, manifest, &checksum) {
+            Ok(package_dir) => {
+                println!("");
+                println!("   ✓ Published to local registry:");
+                println!("     {}", package_dir.display());
+                println!("");
+                println!("   To use this package:");
+                println!("     gotgan add {} --local", manifest.package.name);
+            }
+            Err(e) => {
+                return Err(BuildError::CompilerError(format!("Failed to publish: {}", e)));
+            }
+        }
+    } else {
+        // For now, show instructions for manual publishing to remote registry
+        println!("");
+        println!("   To publish to the BMB registry:");
+        println!("");
+        println!("   1. Create a GitHub release in lang-bmb/registry");
+        println!("   2. Upload: {}", archive_path.display());
+        println!("   3. Add to registry index.json:");
+        println!("");
+        println!("{}", package_json);
+        println!("");
+        println!("   Note: Automated publishing will be available in a future version.");
+    }
 
     Ok(())
 }
