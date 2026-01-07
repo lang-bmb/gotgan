@@ -3,6 +3,8 @@
 //! The lock file (gotgan.lock) records exact dependency versions
 //! to ensure reproducible builds across different machines.
 
+#![allow(dead_code)]
+
 use crate::resolver::ResolvedDep;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

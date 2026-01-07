@@ -2,6 +2,8 @@
 //!
 //! Wraps the bmb compiler to build, run, check, verify, and test BMB projects.
 
+#![allow(dead_code)]
+
 use crate::config::{ConfigError, Manifest};
 use crate::lock::{LockError, LockFile, LOCK_FILE_NAME};
 use crate::resolver::{DependencyResolver, ResolveError, ResolvedDep};
@@ -193,7 +195,7 @@ fn collect_bmb_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), BuildEr
 
         if path.is_dir() {
             collect_bmb_files(&path, files)?;
-        } else if path.extension().map_or(false, |ext| ext == "bmb") {
+        } else if path.extension().is_some_and(|ext| ext == "bmb") {
             files.push(path);
         }
     }
@@ -204,11 +206,10 @@ fn collect_bmb_files(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), BuildEr
 /// Find bmb compiler in PATH or common locations
 fn find_bmb_compiler() -> Option<PathBuf> {
     // Try PATH first
-    if let Ok(output) = Command::new("bmb").arg("--version").output() {
-        if output.status.success() {
+    if let Ok(output) = Command::new("bmb").arg("--version").output()
+        && output.status.success() {
             return Some(PathBuf::from("bmb"));
         }
-    }
 
     // Try common locations
     let candidates = [
@@ -426,11 +427,10 @@ pub fn run_test(filter: Option<String>, verbose: bool) -> Result<(), BuildError>
     // Also look for test_ prefix files in src/
     let src_files = ctx.source_files()?;
     for file in src_files {
-        if let Some(name) = file.file_name() {
-            if name.to_string_lossy().starts_with("test_") {
+        if let Some(name) = file.file_name()
+            && name.to_string_lossy().starts_with("test_") {
                 test_files.push(file);
             }
-        }
     }
 
     if test_files.is_empty() {

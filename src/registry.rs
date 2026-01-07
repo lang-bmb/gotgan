@@ -2,6 +2,8 @@
 //!
 //! Supports both local and remote (GitHub-based) package registries for BMB packages.
 
+#![allow(dead_code)]
+
 use crate::config::{Dependency, DetailedDependency, Manifest};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
@@ -9,7 +11,7 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 use tar::Archive;
 use thiserror::Error;
@@ -615,7 +617,7 @@ pub fn generate_package_info(manifest: &Manifest, checksum: &str) -> PackageInfo
 }
 
 /// Resolve a dependency to a Dependency struct
-pub fn resolve_registry_dependency(name: &str, version: &str) -> Dependency {
+pub fn resolve_registry_dependency(_name: &str, version: &str) -> Dependency {
     Dependency::Detailed(DetailedDependency {
         version: Some(version.to_string()),
         path: None,
@@ -627,7 +629,7 @@ pub fn resolve_registry_dependency(name: &str, version: &str) -> Dependency {
 }
 
 /// Resolve a local registry dependency
-pub fn resolve_local_dependency(name: &str, version: &str, local_path: &Path) -> Dependency {
+pub fn resolve_local_dependency(_name: &str, version: &str, local_path: &Path) -> Dependency {
     Dependency::Detailed(DetailedDependency {
         version: Some(version.to_string()),
         path: Some(local_path.to_string_lossy().to_string()),
@@ -744,20 +746,20 @@ fn compare_semver(a: &str, b: &str) -> std::cmp::Ordering {
 fn parse_version_constraint(constraint: &str) -> (String, String) {
     let constraint = constraint.trim();
 
-    if constraint.starts_with('^') {
-        ("^".to_string(), constraint[1..].to_string())
-    } else if constraint.starts_with('~') {
-        ("~".to_string(), constraint[1..].to_string())
-    } else if constraint.starts_with(">=") {
-        (">=".to_string(), constraint[2..].to_string())
-    } else if constraint.starts_with("<=") {
-        ("<=".to_string(), constraint[2..].to_string())
-    } else if constraint.starts_with('>') {
-        (">".to_string(), constraint[1..].to_string())
-    } else if constraint.starts_with('<') {
-        ("<".to_string(), constraint[1..].to_string())
-    } else if constraint.starts_with('=') {
-        ("=".to_string(), constraint[1..].to_string())
+    if let Some(ver) = constraint.strip_prefix('^') {
+        ("^".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix('~') {
+        ("~".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix(">=") {
+        (">=".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix("<=") {
+        ("<=".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix('>') {
+        (">".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix('<') {
+        ("<".to_string(), ver.to_string())
+    } else if let Some(ver) = constraint.strip_prefix('=') {
+        ("=".to_string(), ver.to_string())
     } else {
         // Exact version
         ("=".to_string(), constraint.to_string())

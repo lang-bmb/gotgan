@@ -7,6 +7,8 @@
 //! - src/: Source code
 //! - bin/: Compiled binaries (multi-target)
 
+#![allow(dead_code)]
+
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::{Deserialize, Serialize};
@@ -315,7 +317,7 @@ impl BmbxBundle {
 
             if path.is_dir() {
                 Self::extract_contracts_recursive(&path, functions, types)?;
-            } else if path.extension().map_or(false, |e| e == "bmb") {
+            } else if path.extension().is_some_and(|e| e == "bmb") {
                 Self::extract_from_file(&path, functions, types)?;
             }
         }
@@ -351,11 +353,10 @@ impl BmbxBundle {
             }
 
             // Parse type definitions with refinements
-            if line.starts_with("type ") && line.contains("where") {
-                if let Some(type_contract) = Self::parse_type_refinement(line) {
+            if line.starts_with("type ") && line.contains("where")
+                && let Some(type_contract) = Self::parse_type_refinement(line) {
                     types.push(type_contract);
                 }
-            }
 
             i += 1;
         }
@@ -368,7 +369,7 @@ impl BmbxBundle {
         lines: &[&str],
         start_idx: usize,
         visibility: &str,
-        source_file: Option<&str>,
+        _source_file: Option<&str>,
     ) -> Option<FunctionContract> {
         let first_line = lines[start_idx].trim();
 
@@ -379,15 +380,15 @@ impl BmbxBundle {
 
         // Extract signature (from fn to return type)
         let mut signature = String::new();
-        let mut current_line = first_line.to_string();
+        let current_line = first_line.to_string();
 
         // Find the complete signature including return type
-        if let Some(arrow_pos) = current_line.find("->") {
+        if let Some(_arrow_pos) = current_line.find("->") {
             // Extract params and return type
             if let Some(paren_start) = current_line.find('(') {
                 signature = current_line[paren_start..].to_string();
                 // Clean up - find end of return type
-                if let Some(ret_end) = signature.find(|c| c == '\n' || c == '=') {
+                if let Some(ret_end) = signature.find(['\n', '=']) {
                     signature.truncate(ret_end);
                 }
             }
@@ -418,25 +419,24 @@ impl BmbxBundle {
         while j < lines.len() {
             let line = lines[j].trim();
 
-            if line.starts_with("pre ") {
-                let expr = line[4..].trim().to_string();
+            if let Some(rest) = line.strip_prefix("pre ") {
+                let expr = rest.trim().to_string();
                 preconditions.push(ContractClause {
                     expr,
                     message: None,
                 });
-            } else if line.starts_with("post ") {
-                let expr = line[5..].trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("post ") {
+                let expr = rest.trim().to_string();
                 postconditions.push(ContractClause {
                     expr,
                     message: None,
                 });
-            } else if line.starts_with('@') {
+            } else if let Some(rest) = line.strip_prefix('@') {
                 // Extract attribute
-                let attr = line[1..].split_whitespace().next().unwrap_or("");
+                let attr = rest.split_whitespace().next().unwrap_or("");
                 attributes.push(format!("@{}", attr));
-            } else if line.starts_with('=') || line.starts_with('{') || line.is_empty() {
-                break;
-            } else if line.starts_with("fn ") || line.starts_with("pub fn ") {
+            } else if line.starts_with('=') || line.starts_with('{') || line.is_empty()
+                || line.starts_with("fn ") || line.starts_with("pub fn ") {
                 break;
             }
 
@@ -481,7 +481,7 @@ impl BmbxBundle {
 
     /// Extract symbols for AI discovery
     fn extract_symbols(
-        project_path: &Path,
+        _project_path: &Path,
         package_name: &str,
         version: &str,
         contracts: &ContractsJson,
@@ -535,7 +535,7 @@ impl BmbxBundle {
 
     /// Extract type information
     fn extract_types(
-        project_path: &Path,
+        _project_path: &Path,
         package_name: &str,
         version: &str,
     ) -> Result<TypesJson, GotganError> {
@@ -682,7 +682,7 @@ impl BmbxBundle {
 
             if path.is_dir() {
                 Self::add_directory_to_archive(archive, &path, &archive_path)?;
-            } else if path.extension().map_or(false, |e| e == "bmb") {
+            } else if path.extension().is_some_and(|e| e == "bmb") {
                 let content = fs::read_to_string(&path)?;
                 Self::add_bytes_to_archive(archive, &archive_path, content.as_bytes())?;
             }
@@ -710,7 +710,9 @@ fn infer_description(name: &str) -> String {
     let words: Vec<&str> = name.split('_').collect();
 
     // Common verb patterns
-    let description = match words.first() {
+    
+
+    match words.first() {
         Some(&"is") | Some(&"has") | Some(&"can") => {
             format!("Check if {}", words[1..].join(" "))
         }
@@ -751,9 +753,7 @@ fn infer_description(name: &str) -> String {
             format!("Strip {}", words[1..].join(" "))
         }
         _ => words.join(" "),
-    };
-
-    description
+    }
 }
 
 /// Infer semantic tags from symbol names
@@ -870,11 +870,10 @@ pub fn run_explore(
 
         for export in &bundle.symbols.exports {
             // Apply filter if provided
-            if let Some(ref pattern) = filter {
-                if !export.name.contains(pattern) {
+            if let Some(ref pattern) = filter
+                && !export.name.contains(pattern) {
                     continue;
                 }
-            }
 
             let kind_str = match export.kind {
                 SymbolKind::Function => "fn",
@@ -908,11 +907,10 @@ pub fn run_explore(
 
         for func in &bundle.contracts.functions {
             // Apply filter if provided
-            if let Some(ref pattern) = filter {
-                if !func.name.contains(pattern) {
+            if let Some(ref pattern) = filter
+                && !func.name.contains(pattern) {
                     continue;
                 }
-            }
 
             println!("  {}", func.name);
             for pre in &func.preconditions {
@@ -926,11 +924,10 @@ pub fn run_explore(
 
         for ty in &bundle.contracts.types {
             // Apply filter if provided
-            if let Some(ref pattern) = filter {
-                if !ty.name.contains(pattern) {
+            if let Some(ref pattern) = filter
+                && !ty.name.contains(pattern) {
                     continue;
                 }
-            }
             println!("  type {} = {} where {}", ty.name, ty.base, ty.refinement);
         }
     }
@@ -945,11 +942,10 @@ pub fn run_explore(
         println!("{}", "-".repeat(60));
 
         for func in &bundle.types.functions {
-            if let Some(ref pattern) = filter {
-                if !func.name.contains(pattern) {
+            if let Some(ref pattern) = filter
+                && !func.name.contains(pattern) {
                     continue;
                 }
-            }
             println!("  fn {}", func.name);
         }
     }

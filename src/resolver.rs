@@ -1,5 +1,7 @@
 //! Dependency resolution for local path dependencies
 
+#![allow(dead_code)]
+
 use crate::config::{ConfigError, Dependency, Manifest};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -191,7 +193,7 @@ fn collect_source_files(dir: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
 
         if path.is_dir() {
             files.extend(collect_source_files(&path)?);
-        } else if path.extension().map_or(false, |ext| ext == "bmb") {
+        } else if path.extension().is_some_and(|ext| ext == "bmb") {
             files.push(path);
         }
     }

@@ -1,5 +1,7 @@
 //! gotgan.toml configuration parsing
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -7,6 +9,7 @@ use std::path::Path;
 use thiserror::Error;
 
 /// Errors that can occur when working with configuration
+#[allow(clippy::enum_variant_names)]
 #[derive(Error, Debug)]
 pub enum ConfigError {
     #[error("Failed to read config file: {0}")]
