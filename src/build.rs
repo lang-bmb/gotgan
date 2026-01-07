@@ -701,22 +701,22 @@ pub fn run_search(query: &str, limit: usize) -> Result<(), BuildError> {
 
     if results.is_empty() {
         println!("   No packages found matching '{}'", query);
-        println!("");
+        println!();
         println!("   Note: The BMB package registry is still being set up.");
         println!("         Once available, packages will be listed here.");
         return Ok(());
     }
 
-    println!("");
+    println!();
     println!("   Found {} package(s):", results.len().min(limit));
-    println!("");
+    println!();
 
     for result in results.iter().take(limit) {
         println!("   {} ({})", result.name, result.latest_version);
         if let Some(ref desc) = result.description {
             println!("       {}", desc);
         }
-        println!("");
+        println!();
     }
 
     Ok(())
@@ -768,10 +768,10 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
         .map_err(|e| BuildError::CompilerError(e.to_string()))?;
 
     if dry_run {
-        println!("");
+        println!();
         println!("   [DRY RUN] Would publish with the following metadata:");
         println!("{}", package_json);
-        println!("");
+        println!();
         println!("   Archive created at: {}", archive_path.display());
         return Ok(());
     }
@@ -796,10 +796,10 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
 
         match local_registry.publish(&ctx.root, manifest, &checksum) {
             Ok(package_dir) => {
-                println!("");
+                println!();
                 println!("   ✓ Published to local registry:");
                 println!("     {}", package_dir.display());
-                println!("");
+                println!();
                 println!("   To use this package:");
                 println!("     gotgan add {} --local", manifest.package.name);
             }
@@ -809,15 +809,15 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
         }
     } else {
         // For now, show instructions for manual publishing to remote registry
-        println!("");
+        println!();
         println!("   To publish to the BMB registry:");
-        println!("");
+        println!();
         println!("   1. Create a GitHub release in lang-bmb/registry");
         println!("   2. Upload: {}", archive_path.display());
         println!("   3. Add to registry index.json:");
-        println!("");
+        println!();
         println!("{}", package_json);
-        println!("");
+        println!();
         println!("   Note: Automated publishing will be available in a future version.");
     }
 
