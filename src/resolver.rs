@@ -1,10 +1,12 @@
-//! Dependency resolution for local path dependencies
+//! Dependency resolution for local path and git dependencies
+//! Supports Go-style git URL dependencies (github.com/user/repo)
 
 #![allow(dead_code)]
 
-use crate::config::{ConfigError, Dependency, Manifest};
+use crate::config::{ConfigError, Dependency, DetailedDependency, Manifest};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use thiserror::Error;
 
 /// Errors during dependency resolution
@@ -24,6 +26,12 @@ pub enum ResolveError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("Git clone failed for {url}: {message}")]
+    GitCloneFailed { url: String, message: String },
+
+    #[error("Git checkout failed for {url} ref {git_ref}: {message}")]
+    GitCheckoutFailed { url: String, git_ref: String, message: String },
 }
 
 /// A resolved dependency with its absolute path
@@ -35,7 +43,18 @@ pub struct ResolvedDep {
     pub source_files: Vec<PathBuf>,
 }
 
-/// Dependency resolver for local path dependencies
+/// Cache directory for git dependencies (~/.gotgan/cache)
+fn get_cache_dir() -> PathBuf {
+    // Try HOME (Unix) or USERPROFILE (Windows)
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".gotgan")
+        .join("cache")
+}
+
+/// Dependency resolver for local path and git dependencies
 pub struct DependencyResolver {
     /// Root project path
     root: PathBuf,
@@ -43,6 +62,8 @@ pub struct DependencyResolver {
     resolved: HashMap<String, ResolvedDep>,
     /// Currently resolving (for cycle detection)
     resolving: HashSet<String>,
+    /// Cache directory for git dependencies
+    cache_dir: PathBuf,
 }
 
 impl DependencyResolver {
@@ -52,6 +73,7 @@ impl DependencyResolver {
             root,
             resolved: HashMap::new(),
             resolving: HashSet::new(),
+            cache_dir: get_cache_dir(),
         }
     }
 
@@ -91,14 +113,24 @@ impl DependencyResolver {
                 return Ok(None);
             }
             Dependency::Detailed(detailed) => {
-                if let Some(path) = &detailed.path {
+                if let Some(git_url) = &detailed.git {
+                    // Go-style git dependency
+                    let cache_path = self.resolve_git_dependency(
+                        name,
+                        git_url,
+                        detailed.tag.as_deref(),
+                        detailed.branch.as_deref(),
+                        detailed.rev.as_deref(),
+                    )?;
+                    // If path is specified, it's a monorepo - append the subpath
+                    if let Some(subpath) = &detailed.path {
+                        cache_path.join(subpath).to_string_lossy().to_string()
+                    } else {
+                        cache_path.to_string_lossy().to_string()
+                    }
+                } else if let Some(path) = &detailed.path {
+                    // Local path dependency (no git)
                     path.clone()
-                } else if detailed.git.is_some() {
-                    eprintln!(
-                        "Warning: Git dependencies not yet supported, skipping '{}'",
-                        name
-                    );
-                    return Ok(None);
                 } else if detailed.version.is_some() {
                     eprintln!(
                         "Warning: Registry dependencies not yet supported, skipping '{}'",
@@ -176,6 +208,96 @@ impl DependencyResolver {
     pub fn build_order(&self) -> Vec<&ResolvedDep> {
         // For now, just return all deps (simple topological order not needed for path deps)
         self.resolved.values().collect()
+    }
+
+    /// Resolve a git dependency (Go-style: github.com/user/repo)
+    /// Returns the local path where the dependency is cached
+    fn resolve_git_dependency(
+        &self,
+        name: &str,
+        git_url: &str,
+        tag: Option<&str>,
+        branch: Option<&str>,
+        rev: Option<&str>,
+    ) -> Result<PathBuf, ResolveError> {
+        // Normalize URL: add https:// if not present
+        let full_url = if git_url.starts_with("http://") || git_url.starts_with("https://") {
+            git_url.to_string()
+        } else {
+            format!("https://{}", git_url)
+        };
+
+        // Determine git ref (priority: rev > tag > branch > default)
+        let git_ref = rev.or(tag).or(branch).unwrap_or("HEAD");
+
+        // Create cache directory path
+        // ~/.gotgan/cache/github.com/user/repo@v1.0.0
+        let safe_url = git_url
+            .replace("https://", "")
+            .replace("http://", "")
+            .replace('/', "_");
+        let cache_name = format!("{}@{}", safe_url, git_ref);
+        let cache_path = self.cache_dir.join(&cache_name);
+
+        // Check if already cached
+        if cache_path.exists() && cache_path.join("gotgan.toml").exists() {
+            eprintln!("   Using cached: {} @ {}", name, git_ref);
+            return Ok(cache_path);
+        }
+
+        // Create cache directory
+        std::fs::create_dir_all(&self.cache_dir).map_err(|e| ResolveError::IoError(e))?;
+
+        eprintln!("   Fetching: {} from {} @ {}", name, git_url, git_ref);
+
+        // Clone the repository
+        let clone_result = Command::new("git")
+            .args(["clone", "--depth", "1"])
+            .args(if let Some(b) = branch {
+                vec!["--branch", b]
+            } else if let Some(t) = tag {
+                vec!["--branch", t]
+            } else {
+                vec![]
+            })
+            .arg(&full_url)
+            .arg(&cache_path)
+            .output();
+
+        match clone_result {
+            Ok(output) if output.status.success() => {
+                // If rev is specified, checkout that specific commit
+                if let Some(r) = rev {
+                    let checkout_result = Command::new("git")
+                        .args(["checkout", r])
+                        .current_dir(&cache_path)
+                        .output();
+
+                    if let Ok(output) = checkout_result {
+                        if !output.status.success() {
+                            return Err(ResolveError::GitCheckoutFailed {
+                                url: git_url.to_string(),
+                                git_ref: r.to_string(),
+                                message: String::from_utf8_lossy(&output.stderr).to_string(),
+                            });
+                        }
+                    }
+                }
+                Ok(cache_path)
+            }
+            Ok(output) => {
+                Err(ResolveError::GitCloneFailed {
+                    url: git_url.to_string(),
+                    message: String::from_utf8_lossy(&output.stderr).to_string(),
+                })
+            }
+            Err(e) => {
+                Err(ResolveError::GitCloneFailed {
+                    url: git_url.to_string(),
+                    message: e.to_string(),
+                })
+            }
+        }
     }
 }
 

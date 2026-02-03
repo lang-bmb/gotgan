@@ -623,6 +623,8 @@ pub fn resolve_registry_dependency(_name: &str, version: &str) -> Dependency {
         path: None,
         git: None,
         branch: None,
+        tag: None,
+        rev: None,
         features: Vec::new(),
         optional: false,
     })
@@ -635,6 +637,8 @@ pub fn resolve_local_dependency(_name: &str, version: &str, local_path: &Path) -
         path: Some(local_path.to_string_lossy().to_string()),
         git: None,
         branch: None,
+        tag: None,
+        rev: None,
         features: Vec::new(),
         optional: false,
     })

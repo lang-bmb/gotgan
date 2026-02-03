@@ -75,7 +75,18 @@ edition = "2025"
 # BMB packages
 json = "0.1"
 
-# Rust fallback (crates.io)
+# Go-style git dependencies (v0.60.250+)
+[dependencies.bmb-hash]
+git = "github.com/lang-bmb/gotgan-packages"
+tag = "v0.1.0"
+# path in repo: packages/bmb-hash
+
+# Branch or commit
+[dependencies.mylib]
+git = "github.com/user/repo"
+branch = "main"  # or: tag = "v1.0.0", rev = "abc123"
+
+# Rust fallback (crates.io) - planned
 [dependencies.rust]
 serde = "1.0"
 tokio = { version = "1", features = ["full"] }
@@ -83,6 +94,28 @@ tokio = { version = "1", features = ["full"] }
 [dev-dependencies]
 test-utils = "0.1"
 ```
+
+## Git Dependencies (Go-style)
+
+No central registry needed. Dependencies are fetched directly from git repositories.
+
+```toml
+# gotgan.toml
+[dependencies.bmb-json]
+git = "github.com/lang-bmb/gotgan-packages"
+tag = "v0.1.0"
+```
+
+Cache location: `~/.gotgan/cache/github.com_user_repo@v1.0.0/`
+
+### Supported Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `git` | Repository URL (Go-style) | `"github.com/user/repo"` |
+| `tag` | Git tag (recommended for releases) | `"v1.0.0"` |
+| `branch` | Git branch | `"main"` |
+| `rev` | Git commit hash | `"abc1234"` |
 
 ## Local Registry
 

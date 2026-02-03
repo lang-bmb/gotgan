@@ -72,6 +72,10 @@ pub enum Dependency {
 }
 
 /// Detailed dependency with optional features
+/// Supports Go-style git URL dependencies:
+/// - git = "github.com/user/repo" (default branch)
+/// - git = "github.com/user/repo", tag = "v1.0.0"
+/// - git = "github.com/user/repo", branch = "main"
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetailedDependency {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,11 +84,21 @@ pub struct DetailedDependency {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 
+    /// Git repository URL (Go-style: "github.com/user/repo")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub git: Option<String>,
 
+    /// Git branch to use
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+
+    /// Git tag to use (preferred over branch for releases)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+
+    /// Git commit hash (for exact version pinning)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rev: Option<String>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,

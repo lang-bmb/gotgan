@@ -592,6 +592,8 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
             path: Some(dep_path.clone()),
             git: None,
             branch: None,
+            tag: None,
+            rev: None,
             features: Vec::new(),
             optional: false,
         }), None)
@@ -635,6 +637,8 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
             path: Some(package_path.to_string_lossy().to_string()),
             git: None,
             branch: None,
+            tag: None,
+            rev: None,
             features: Vec::new(),
             optional: false,
         }), Some(resolved_version))
@@ -662,6 +666,8 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
             path: None,
             git: None,
             branch: None,
+            tag: None,
+            rev: None,
             features: Vec::new(),
             optional: false,
         }), Some(resolved_version))
