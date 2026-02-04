@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+use crate::cache::{fingerprint_files, find_stale_files, BuildCache, CacheError};
 use crate::config::{ConfigError, Manifest};
 use crate::lock::{LockError, LockFile, LOCK_FILE_NAME};
 use crate::resolver::{DependencyResolver, ResolveError, ResolvedDep};
@@ -50,6 +51,115 @@ pub enum BuildError {
 
     #[error("Lock file error: {0}")]
     LockError(#[from] LockError),
+
+    #[error("Cache error: {0}")]
+    CacheError(#[from] CacheError),
+
+    #[error("Workspace member not found: {0}")]
+    WorkspaceMemberNotFound(String),
+
+    #[error("Invalid workspace manifest: missing [workspace] or [package] section")]
+    InvalidWorkspaceManifest,
+}
+
+/// Workspace context for monorepo builds
+pub struct WorkspaceContext {
+    pub root: PathBuf,
+    pub manifest: Manifest,
+    pub target_dir: PathBuf,
+    /// Paths to all member packages
+    pub members: Vec<PathBuf>,
+}
+
+impl WorkspaceContext {
+    /// Find and load workspace context from current directory or parents
+    pub fn find() -> Result<Option<Self>, BuildError> {
+        let current = std::env::current_dir()?;
+        let root = match find_project_root(&current) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let manifest_path = root.join("gotgan.toml");
+        let manifest = Manifest::load(&manifest_path)?;
+
+        if !manifest.is_workspace() {
+            return Ok(None);
+        }
+
+        let workspace = manifest.workspace.as_ref().unwrap();
+        let target_dir = root.join("target");
+
+        // Resolve member paths (with glob support)
+        let mut members = Vec::new();
+        for pattern in &workspace.members {
+            let member_paths = resolve_workspace_members(&root, pattern)?;
+            members.extend(member_paths);
+        }
+
+        // Filter out excluded members
+        if !workspace.exclude.is_empty() {
+            members.retain(|path| {
+                let relative = path.strip_prefix(&root).unwrap_or(path);
+                !workspace.exclude.iter().any(|ex| {
+                    relative.to_string_lossy().starts_with(ex)
+                })
+            });
+        }
+
+        Ok(Some(Self {
+            root,
+            manifest,
+            target_dir,
+            members,
+        }))
+    }
+
+    /// Get member package names
+    pub fn member_names(&self) -> Result<Vec<String>, BuildError> {
+        let mut names = Vec::new();
+        for member_path in &self.members {
+            let manifest_path = member_path.join("gotgan.toml");
+            if manifest_path.exists() {
+                let member_manifest = Manifest::load(&manifest_path)?;
+                if member_manifest.is_package() {
+                    names.push(member_manifest.package().name.clone());
+                }
+            }
+        }
+        Ok(names)
+    }
+}
+
+/// Resolve workspace member paths from a glob pattern
+fn resolve_workspace_members(root: &Path, pattern: &str) -> Result<Vec<PathBuf>, BuildError> {
+    let mut members = Vec::new();
+
+    if pattern.contains('*') {
+        // Simple glob support: "packages/*" or "crates/*"
+        let parts: Vec<&str> = pattern.split('*').collect();
+        if parts.len() == 2 && parts[1].is_empty() {
+            // Pattern like "packages/*"
+            let base_dir = root.join(parts[0].trim_end_matches('/'));
+            if base_dir.exists() && base_dir.is_dir() {
+                for entry in std::fs::read_dir(&base_dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_dir() && path.join("gotgan.toml").exists() {
+                        members.push(path);
+                    }
+                }
+            }
+        }
+    } else {
+        // Direct path
+        let member_path = root.join(pattern);
+        if member_path.exists() && member_path.join("gotgan.toml").exists() {
+            members.push(member_path);
+        }
+    }
+
+    Ok(members)
 }
 
 /// Project context loaded from gotgan.toml
@@ -161,9 +271,9 @@ impl ProjectContext {
         } else {
             let subdir = if release { "release" } else { "debug" };
             let binary_name = if cfg!(windows) {
-                format!("{}.exe", self.manifest.package.name)
+                format!("{}.exe", self.manifest.package().name)
             } else {
-                self.manifest.package.name.clone()
+                self.manifest.package().name.clone()
             };
             self.target_dir.join(subdir).join(binary_name)
         }
@@ -254,13 +364,128 @@ fn run_bmb(args: &[&str]) -> Result<(), BuildError> {
     }
 }
 
-/// Build the project
+/// Get compiler version for cache key
+fn get_compiler_version() -> String {
+    if let Some(bmb) = find_bmb_compiler() {
+        if let Ok(output) = Command::new(&bmb).arg("--version").output() {
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).trim().to_string();
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+/// Build all workspace members
+fn run_workspace_build(ws: WorkspaceContext, opts: BuildOptions) -> Result<(), BuildError> {
+    println!(
+        "   Building workspace with {} members",
+        ws.members.len()
+    );
+
+    // Create shared target directory
+    std::fs::create_dir_all(&ws.target_dir)?;
+
+    let mut success_count = 0;
+    let mut skip_count = 0;
+
+    for member_path in &ws.members {
+        let manifest_path = member_path.join("gotgan.toml");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let member_manifest = Manifest::load(&manifest_path)?;
+        if !member_manifest.is_package() {
+            continue;
+        }
+
+        let pkg = member_manifest.package();
+        println!();
+        println!("   Building member: {} v{}", pkg.name, pkg.version);
+
+        // Check if it's a library or binary
+        let main_file = member_path.join("src").join("main.bmb");
+        let lib_file = member_path.join("src").join("lib.bmb");
+
+        if main_file.exists() {
+            // Binary project - compile
+            let output = if opts.release {
+                ws.target_dir.join("release").join(format!(
+                    "{}{}",
+                    pkg.name,
+                    if cfg!(windows) { ".exe" } else { "" }
+                ))
+            } else {
+                ws.target_dir.join("debug").join(format!(
+                    "{}{}",
+                    pkg.name,
+                    if cfg!(windows) { ".exe" } else { "" }
+                ))
+            };
+
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let main_str = main_file.to_string_lossy();
+            let output_str = output.to_string_lossy();
+
+            let mut args = vec!["build", &main_str, "-o", &output_str];
+            if opts.release {
+                args.push("--aggressive");
+            }
+
+            match run_bmb(&args) {
+                Ok(()) => {
+                    success_count += 1;
+                    println!("   ✓ Built {}", output.display());
+                }
+                Err(e) => {
+                    eprintln!("   ✗ Failed to build {}: {}", pkg.name, e);
+                    return Err(e);
+                }
+            }
+        } else if lib_file.exists() {
+            // Library project - type check only
+            let lib_str = lib_file.to_string_lossy();
+            match run_bmb(&["check", &lib_str]) {
+                Ok(()) => {
+                    skip_count += 1;
+                    println!("   ✓ Checked {} (library)", pkg.name);
+                }
+                Err(e) => {
+                    eprintln!("   ✗ Failed to check {}: {}", pkg.name, e);
+                    return Err(e);
+                }
+            }
+        } else {
+            println!("   - Skipped {} (no main.bmb or lib.bmb)", pkg.name);
+            skip_count += 1;
+        }
+    }
+
+    println!();
+    println!(
+        "   Finished workspace: {} built, {} skipped/checked",
+        success_count, skip_count
+    );
+
+    Ok(())
+}
+
+/// Build the project (or all workspace members)
 pub fn run_build(opts: BuildOptions) -> Result<(), BuildError> {
+    // Check if we're in a workspace
+    if let Some(ws) = WorkspaceContext::find()? {
+        return run_workspace_build(ws, opts);
+    }
+
     let ctx = ProjectContext::find()?;
 
     println!(
         "   Building {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     // Print dependency info
@@ -292,16 +517,63 @@ pub fn run_build(opts: BuildOptions) -> Result<(), BuildError> {
         std::fs::create_dir_all(parent)?;
     }
 
+    // Load build cache
+    let mut cache = BuildCache::load(&ctx.target_dir)?;
+
+    // Get all source files
+    let sources = ctx.all_source_files()?;
+
+    // Build flags for cache key
+    let build_flags: Vec<String> = if opts.release {
+        vec!["--aggressive".to_string()]
+    } else {
+        vec![]
+    };
+
+    // Get compiler version for cache key
+    let compiler_version = get_compiler_version();
+
+    // Check if build is up-to-date
+    let output_key = output.strip_prefix(&ctx.target_dir)
+        .unwrap_or(&output)
+        .to_string_lossy()
+        .to_string();
+
+    let stale_files = find_stale_files(&sources, &ctx.root, &cache, &output_key);
+
+    if stale_files.is_empty() && output.exists() {
+        // Check if cache entry is valid (same compiler, same flags)
+        if cache.is_up_to_date(&output_key, &ctx.root, &compiler_version, &build_flags) {
+            println!("   Fresh: no source files changed");
+            println!("   Binary: {}", output.display());
+            return Ok(());
+        }
+    }
+
+    // Report what needs recompilation
+    if !stale_files.is_empty() && stale_files.len() < sources.len() {
+        println!(
+            "   Recompiling: {} of {} files changed",
+            stale_files.len(),
+            sources.len()
+        );
+    }
+
     // Build with bmb build
     let main_str = main_file.to_string_lossy();
     let output_str = output.to_string_lossy();
 
     let mut args = vec!["build", &main_str, "-o", &output_str];
     if opts.release {
-        args.push("-O3");
+        args.push("--aggressive");
     }
 
     run_bmb(&args)?;
+
+    // Update cache with new fingerprints
+    let fingerprints = fingerprint_files(&sources, &ctx.root)?;
+    cache.record_build(output_key, fingerprints, compiler_version, build_flags);
+    cache.save(&ctx.target_dir)?;
 
     // Update lock file if needed
     if !ctx.lock_up_to_date && !ctx.dependencies.is_empty() {
@@ -327,7 +599,7 @@ pub fn run_run(opts: BuildOptions, _program_args: Vec<String>) -> Result<(), Bui
 
     println!(
         "     Running {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     // Use bmb run (interpreter) for now
@@ -364,7 +636,7 @@ pub fn run_check() -> Result<(), BuildError> {
 
     println!(
         "    Checking {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     // Get all source files
@@ -386,7 +658,7 @@ pub fn run_verify(file: Option<PathBuf>) -> Result<(), BuildError> {
 
     println!(
         "   Verifying {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     if let Some(specific_file) = file {
@@ -413,7 +685,7 @@ pub fn run_test(filter: Option<String>, verbose: bool) -> Result<(), BuildError>
 
     println!(
         "    Testing {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     // Look for test files in tests/ directory
@@ -468,12 +740,13 @@ pub fn run_clean() -> Result<(), BuildError> {
 
     println!(
         "    Cleaning {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     if ctx.target_dir.exists() {
         std::fs::remove_dir_all(&ctx.target_dir)?;
         println!("   Removed {}", ctx.target_dir.display());
+        println!("   Build cache cleared");
     } else {
         println!("   Nothing to clean (target/ does not exist)");
     }
@@ -487,7 +760,7 @@ pub fn run_tree(show_all: bool) -> Result<(), BuildError> {
 
     println!(
         "{} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     if ctx.dependencies.is_empty() {
@@ -529,7 +802,7 @@ pub fn run_update() -> Result<(), BuildError> {
 
     println!(
         "   Updating {} v{}",
-        ctx.manifest.package.name, ctx.manifest.package.version
+        ctx.manifest.package().name, ctx.manifest.package().version
     );
 
     if ctx.dependencies.is_empty() {
@@ -739,22 +1012,22 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
     let registry_type = if local { "local registry" } else { "registry" };
     println!(
         "   Publishing {} v{} to {}",
-        manifest.package.name, manifest.package.version, registry_type
+        manifest.package().name, manifest.package().version, registry_type
     );
 
     // Validate package metadata
-    if manifest.package.description.is_none() {
+    if manifest.package().description.is_none() {
         eprintln!("   Warning: 'description' is recommended for published packages");
     }
-    if manifest.package.license.is_none() {
+    if manifest.package().license.is_none() {
         eprintln!("   Warning: 'license' is recommended for published packages");
     }
-    if manifest.package.repository.is_none() && !local {
+    if manifest.package().repository.is_none() && !local {
         eprintln!("   Warning: 'repository' is recommended for published packages");
     }
 
     // Create package archive
-    let archive_name = format!("{}-{}.tar.gz", manifest.package.name, manifest.package.version);
+    let archive_name = format!("{}-{}.tar.gz", manifest.package().name, manifest.package().version);
     let archive_path = ctx.target_dir.join(&archive_name);
 
     std::fs::create_dir_all(&ctx.target_dir)?;
@@ -784,7 +1057,7 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
 
     // Confirm with user
     if !skip_confirm {
-        print!("   Publish {} v{} to {}? [y/N]: ", manifest.package.name, manifest.package.version, registry_type);
+        print!("   Publish {} v{} to {}? [y/N]: ", manifest.package().name, manifest.package().version, registry_type);
         io::stdout().flush()?;
 
         let mut input = String::new();
@@ -807,7 +1080,7 @@ pub fn run_publish(skip_confirm: bool, dry_run: bool, local: bool) -> Result<(),
                 println!("     {}", package_dir.display());
                 println!();
                 println!("   To use this package:");
-                println!("     gotgan add {} --local", manifest.package.name);
+                println!("     gotgan add {} --local", manifest.package().name);
             }
             Err(e) => {
                 return Err(BuildError::CompilerError(format!("Failed to publish: {}", e)));

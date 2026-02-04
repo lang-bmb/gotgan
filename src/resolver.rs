@@ -3,7 +3,7 @@
 
 #![allow(dead_code)]
 
-use crate::config::{ConfigError, Dependency, DetailedDependency, Manifest};
+use crate::config::{ConfigError, Dependency, Manifest};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -192,7 +192,7 @@ impl DependencyResolver {
 
         let resolved = ResolvedDep {
             name: name.to_string(),
-            version: dep_manifest.package.version,
+            version: dep_manifest.package().version.clone(),
             path: abs_path,
             source_files,
         };

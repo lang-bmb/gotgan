@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 mod bmbx;
 mod build;
+mod cache;
 mod config;
 mod error;
 mod lock;

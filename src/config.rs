@@ -23,15 +23,37 @@ pub enum ConfigError {
 }
 
 /// BMB project manifest (gotgan.toml)
+/// Can be either a package manifest or a workspace manifest
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
-    pub package: Package,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<Package>,
+
+    /// Workspace configuration (for monorepo support)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<Workspace>,
 
     #[serde(default)]
     pub dependencies: HashMap<String, Dependency>,
 
     #[serde(default, rename = "dev-dependencies")]
     pub dev_dependencies: HashMap<String, Dependency>,
+}
+
+/// Workspace configuration for monorepo support
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Workspace {
+    /// Member package paths (glob patterns supported)
+    /// Example: ["packages/*", "crates/core"]
+    pub members: Vec<String>,
+
+    /// Packages to exclude from workspace
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+
+    /// Shared dependencies for all workspace members
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub dependencies: HashMap<String, Dependency>,
 }
 
 /// Package metadata
@@ -108,10 +130,10 @@ pub struct DetailedDependency {
 }
 
 impl Manifest {
-    /// Create a new manifest with default values
+    /// Create a new package manifest with default values
     pub fn new(name: &str) -> Self {
         Self {
-            package: Package {
+            package: Some(Package {
                 name: name.to_string(),
                 version: "0.1.0".to_string(),
                 edition: default_edition(),
@@ -119,10 +141,40 @@ impl Manifest {
                 license: None,
                 authors: None,
                 repository: None,
-            },
+            }),
+            workspace: None,
             dependencies: HashMap::new(),
             dev_dependencies: HashMap::new(),
         }
+    }
+
+    /// Create a new workspace manifest
+    pub fn new_workspace(members: Vec<String>) -> Self {
+        Self {
+            package: None,
+            workspace: Some(Workspace {
+                members,
+                exclude: Vec::new(),
+                dependencies: HashMap::new(),
+            }),
+            dependencies: HashMap::new(),
+            dev_dependencies: HashMap::new(),
+        }
+    }
+
+    /// Check if this is a workspace manifest
+    pub fn is_workspace(&self) -> bool {
+        self.workspace.is_some()
+    }
+
+    /// Check if this is a package manifest
+    pub fn is_package(&self) -> bool {
+        self.package.is_some()
+    }
+
+    /// Get package info (panics if workspace manifest)
+    pub fn package(&self) -> &Package {
+        self.package.as_ref().expect("Expected package manifest, got workspace manifest")
     }
 
     /// Load manifest from file
@@ -152,9 +204,9 @@ mod tests {
     #[test]
     fn test_new_manifest() {
         let manifest = Manifest::new("test-project");
-        assert_eq!(manifest.package.name, "test-project");
-        assert_eq!(manifest.package.version, "0.1.0");
-        assert_eq!(manifest.package.edition, "2025");
+        assert_eq!(manifest.package().name, "test-project");
+        assert_eq!(manifest.package().version, "0.1.0");
+        assert_eq!(manifest.package().edition, "2025");
     }
 
     #[test]
@@ -163,5 +215,14 @@ mod tests {
         let toml = manifest.to_toml().unwrap();
         assert!(toml.contains("name = \"hello\""));
         assert!(toml.contains("version = \"0.1.0\""));
+    }
+
+    #[test]
+    fn test_workspace_manifest() {
+        let manifest = Manifest::new_workspace(vec!["packages/*".to_string()]);
+        assert!(manifest.is_workspace());
+        assert!(!manifest.is_package());
+        let workspace = manifest.workspace.as_ref().unwrap();
+        assert_eq!(workspace.members, vec!["packages/*"]);
     }
 }

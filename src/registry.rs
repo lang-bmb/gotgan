@@ -314,8 +314,8 @@ impl LocalRegistry {
 
     /// Publish a package to the local registry
     pub fn publish(&self, project_dir: &Path, manifest: &Manifest, checksum: &str) -> Result<PathBuf, RegistryError> {
-        let name = &manifest.package.name;
-        let version = &manifest.package.version;
+        let name = &manifest.package().name;
+        let version = &manifest.package().version;
 
         // Create package directory: ~/.gotgan/registry/{name}/{version}/
         let package_dir = self.registry_dir.join(name).join(version);
@@ -361,10 +361,10 @@ impl LocalRegistry {
             // Create new package entry
             let pkg_info = PackageInfo {
                 name: name.clone(),
-                description: manifest.package.description.clone(),
+                description: manifest.package().description.clone(),
                 versions: vec![version_info],
-                repository: manifest.package.repository.clone(),
-                license: manifest.package.license.clone(),
+                repository: manifest.package().repository.clone(),
+                license: manifest.package().license.clone(),
                 keywords: None,
             };
             index.packages.insert(name.clone(), pkg_info);
@@ -586,12 +586,12 @@ pub fn create_package_archive(project_dir: &Path, output_path: &Path) -> Result<
 /// Generate package metadata for publishing
 pub fn generate_package_info(manifest: &Manifest, checksum: &str) -> PackageInfo {
     let version_info = VersionInfo {
-        version: manifest.package.version.clone(),
+        version: manifest.package().version.clone(),
         checksum: checksum.to_string(),
         published_at: chrono_now(),
         download_url: format!(
             "https://github.com/lang-bmb/registry/releases/download/{}/{}-{}.tar.gz",
-            manifest.package.name, manifest.package.name, manifest.package.version
+            manifest.package().name, manifest.package().name, manifest.package().version
         ),
         dependencies: manifest
             .dependencies
@@ -607,11 +607,11 @@ pub fn generate_package_info(manifest: &Manifest, checksum: &str) -> PackageInfo
     };
 
     PackageInfo {
-        name: manifest.package.name.clone(),
-        description: manifest.package.description.clone(),
+        name: manifest.package().name.clone(),
+        description: manifest.package().description.clone(),
         versions: vec![version_info],
-        repository: manifest.package.repository.clone(),
-        license: manifest.package.license.clone(),
+        repository: manifest.package().repository.clone(),
+        license: manifest.package().license.clone(),
         keywords: None,
     }
 }
