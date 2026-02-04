@@ -969,20 +969,21 @@ pub fn run_add(name: &str, path: Option<String>, version: Option<String>, dev: b
     Ok(())
 }
 
-/// Search for packages in the registry
+/// Search for packages in all sources (stdlib, local registry, remote registry)
 pub fn run_search(query: &str, limit: usize) -> Result<(), BuildError> {
-    use crate::registry::RegistryClient;
+    use crate::registry::search_all;
 
     println!("    Searching for '{}'...", query);
 
-    let registry = RegistryClient::new();
-    let results = registry.search(query).map_err(|e| BuildError::CompilerError(e.to_string()))?;
+    let results = search_all(query);
 
     if results.is_empty() {
         println!("   No packages found matching '{}'", query);
         println!();
-        println!("   Note: The BMB package registry is still being set up.");
-        println!("         Once available, packages will be listed here.");
+        println!("   Searched in:");
+        println!("   - Standard library (packages/bmb-*)");
+        println!("   - Local registry (~/.gotgan/registry/)");
+        println!("   - Remote registry");
         return Ok(());
     }
 
@@ -991,7 +992,7 @@ pub fn run_search(query: &str, limit: usize) -> Result<(), BuildError> {
     println!();
 
     for result in results.iter().take(limit) {
-        println!("   {} ({})", result.name, result.latest_version);
+        println!("   {} (v{})", result.name, result.latest_version);
         if let Some(ref desc) = result.description {
             println!("       {}", desc);
         }

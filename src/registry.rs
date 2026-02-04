@@ -806,6 +806,174 @@ fn matches_constraint(version: &str, op: &str, constraint_ver: &str) -> bool {
     }
 }
 
+// ============================================================================
+// StandardLibrary - Search packages in the standard library (packages/ dir)
+// ============================================================================
+
+/// Standard library package metadata
+pub struct StdLibPackage {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub path: PathBuf,
+}
+
+/// Search standard library packages
+///
+/// Looks for packages in the `packages/` directory relative to:
+/// 1. BMB_STDLIB_PATH environment variable
+/// 2. Current executable's parent directory
+/// 3. Common installation paths
+pub fn search_stdlib(query: &str) -> Vec<SearchResult> {
+    let query_lower = query.to_lowercase();
+    let packages = discover_stdlib_packages();
+
+    packages
+        .into_iter()
+        .filter(|pkg| {
+            pkg.name.to_lowercase().contains(&query_lower)
+                || pkg.description.to_lowercase().contains(&query_lower)
+        })
+        .map(|pkg| SearchResult {
+            name: pkg.name,
+            description: Some(pkg.description),
+            latest_version: pkg.version,
+            downloads: None,
+        })
+        .collect()
+}
+
+/// Discover all standard library packages
+fn discover_stdlib_packages() -> Vec<StdLibPackage> {
+    let mut packages = Vec::new();
+
+    // Try to find packages directory
+    let packages_dirs = find_stdlib_paths();
+
+    for packages_dir in packages_dirs {
+        if !packages_dir.exists() {
+            continue;
+        }
+
+        if let Ok(entries) = fs::read_dir(&packages_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(pkg) = load_stdlib_package(&path) {
+                        packages.push(pkg);
+                    }
+                }
+            }
+        }
+    }
+
+    packages
+}
+
+/// Find potential standard library paths
+fn find_stdlib_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    // 1. BMB_STDLIB_PATH environment variable
+    if let Ok(stdlib_path) = std::env::var("BMB_STDLIB_PATH") {
+        paths.push(PathBuf::from(stdlib_path));
+    }
+
+    // 2. Relative to current directory (for development)
+    paths.push(PathBuf::from("packages"));
+    paths.push(PathBuf::from("../packages"));
+    paths.push(PathBuf::from("../../packages"));
+
+    // 3. Relative to executable
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            paths.push(exe_dir.join("packages"));
+            paths.push(exe_dir.join("../packages"));
+            paths.push(exe_dir.join("../../packages"));
+        }
+    }
+
+    // 4. Common installation paths
+    let home = dirs_home_dir();
+    paths.push(home.join(".bmb").join("packages"));
+    paths.push(home.join(".gotgan").join("stdlib"));
+
+    paths
+}
+
+/// Load package metadata from a directory
+fn load_stdlib_package(path: &Path) -> Option<StdLibPackage> {
+    let gotgan_toml = path.join("gotgan.toml");
+    if !gotgan_toml.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&gotgan_toml).ok()?;
+    let manifest: crate::config::Manifest = toml::from_str(&content).ok()?;
+
+    if !manifest.is_package() {
+        return None;
+    }
+
+    let pkg = manifest.package();
+    let description = pkg.description.clone().unwrap_or_else(|| {
+        // Generate description from package name
+        let name = &pkg.name;
+        if name.starts_with("bmb-") {
+            format!("BMB standard library: {}", name.strip_prefix("bmb-").unwrap_or(name))
+        } else {
+            format!("BMB package: {}", name)
+        }
+    });
+
+    Some(StdLibPackage {
+        name: pkg.name.clone(),
+        version: pkg.version.clone(),
+        description,
+        path: path.to_path_buf(),
+    })
+}
+
+/// Combined search across all sources
+///
+/// Search order:
+/// 1. Standard library (packages/bmb-*)
+/// 2. Local registry (~/.gotgan/registry/)
+/// 3. Remote registry (if available)
+pub fn search_all(query: &str) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    // 1. Standard library (highest priority)
+    for result in search_stdlib(query) {
+        if seen_names.insert(result.name.clone()) {
+            results.push(result);
+        }
+    }
+
+    // 2. Local registry
+    let local_registry = LocalRegistry::new();
+    if let Ok(local_results) = local_registry.search(query) {
+        for result in local_results {
+            if seen_names.insert(result.name.clone()) {
+                results.push(result);
+            }
+        }
+    }
+
+    // 3. Remote registry (optional, may fail)
+    let remote_registry = RegistryClient::new();
+    if let Ok(remote_results) = remote_registry.search(query) {
+        for result in remote_results {
+            if seen_names.insert(result.name.clone()) {
+                results.push(result);
+            }
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
