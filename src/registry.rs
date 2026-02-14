@@ -858,11 +858,10 @@ fn discover_stdlib_packages() -> Vec<StdLibPackage> {
         if let Ok(entries) = fs::read_dir(&packages_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
-                    if let Some(pkg) = load_stdlib_package(&path) {
+                if path.is_dir()
+                    && let Some(pkg) = load_stdlib_package(&path) {
                         packages.push(pkg);
                     }
-                }
             }
         }
     }
@@ -885,13 +884,12 @@ fn find_stdlib_paths() -> Vec<PathBuf> {
     paths.push(PathBuf::from("../../packages"));
 
     // 3. Relative to executable
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent() {
             paths.push(exe_dir.join("packages"));
             paths.push(exe_dir.join("../packages"));
             paths.push(exe_dir.join("../../packages"));
         }
-    }
 
     // 4. Common installation paths
     let home = dirs_home_dir();

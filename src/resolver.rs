@@ -246,7 +246,7 @@ impl DependencyResolver {
         }
 
         // Create cache directory
-        std::fs::create_dir_all(&self.cache_dir).map_err(|e| ResolveError::IoError(e))?;
+        std::fs::create_dir_all(&self.cache_dir).map_err(ResolveError::IoError)?;
 
         eprintln!("   Fetching: {} from {} @ {}", name, git_url, git_ref);
 
@@ -273,15 +273,14 @@ impl DependencyResolver {
                         .current_dir(&cache_path)
                         .output();
 
-                    if let Ok(output) = checkout_result {
-                        if !output.status.success() {
+                    if let Ok(output) = checkout_result
+                        && !output.status.success() {
                             return Err(ResolveError::GitCheckoutFailed {
                                 url: git_url.to_string(),
                                 git_ref: r.to_string(),
                                 message: String::from_utf8_lossy(&output.stderr).to_string(),
                             });
                         }
-                    }
                 }
                 Ok(cache_path)
             }

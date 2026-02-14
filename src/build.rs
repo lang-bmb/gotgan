@@ -366,13 +366,11 @@ fn run_bmb(args: &[&str]) -> Result<(), BuildError> {
 
 /// Get compiler version for cache key
 fn get_compiler_version() -> String {
-    if let Some(bmb) = find_bmb_compiler() {
-        if let Ok(output) = Command::new(&bmb).arg("--version").output() {
-            if output.status.success() {
+    if let Some(bmb) = find_bmb_compiler()
+        && let Ok(output) = Command::new(&bmb).arg("--version").output()
+            && output.status.success() {
                 return String::from_utf8_lossy(&output.stdout).trim().to_string();
             }
-        }
-    }
     "unknown".to_string()
 }
 
