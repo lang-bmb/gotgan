@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use crate::config::{ConfigError, Dependency, Manifest};
+use crate::registry::LocalRegistry;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -54,7 +55,7 @@ fn get_cache_dir() -> PathBuf {
         .join("cache")
 }
 
-/// Dependency resolver for local path and git dependencies
+/// Dependency resolver for local path, git, and registry dependencies
 pub struct DependencyResolver {
     /// Root project path
     root: PathBuf,
@@ -64,6 +65,10 @@ pub struct DependencyResolver {
     resolving: HashSet<String>,
     /// Cache directory for git dependencies
     cache_dir: PathBuf,
+    /// Local package registry for version-only deps
+    local_registry: LocalRegistry,
+    /// Dependency edges for topological sort (dep_name -> set of dependents)
+    dep_edges: HashMap<String, Vec<String>>,
 }
 
 impl DependencyResolver {
@@ -74,6 +79,8 @@ impl DependencyResolver {
             resolved: HashMap::new(),
             resolving: HashSet::new(),
             cache_dir: get_cache_dir(),
+            local_registry: LocalRegistry::new(),
+            dep_edges: HashMap::new(),
         }
     }
 
@@ -101,16 +108,11 @@ impl DependencyResolver {
             return Ok(Some(resolved.clone()));
         }
 
-        // Extract path if it's a path dependency
+        // Extract path — resolves path, git, and registry (version-only) dependencies
         let dep_path = match dep {
-            Dependency::Simple(_version) => {
-                // Version-only dependencies are not supported yet (requires registry)
-                // Just skip them with a warning
-                eprintln!(
-                    "Warning: Registry dependencies not yet supported, skipping '{}'",
-                    name
-                );
-                return Ok(None);
+            Dependency::Simple(version) => {
+                // Version-only dependency — resolve via local registry
+                self.resolve_version_dep(name, version)?
             }
             Dependency::Detailed(detailed) => {
                 if let Some(git_url) = &detailed.git {
@@ -131,12 +133,9 @@ impl DependencyResolver {
                 } else if let Some(path) = &detailed.path {
                     // Local path dependency (no git)
                     path.clone()
-                } else if detailed.version.is_some() {
-                    eprintln!(
-                        "Warning: Registry dependencies not yet supported, skipping '{}'",
-                        name
-                    );
-                    return Ok(None);
+                } else if let Some(version) = &detailed.version {
+                    // Version-only in detailed form — resolve via local registry
+                    self.resolve_version_dep(name, version)?
                 } else {
                     return Err(ResolveError::DependencyNotFound {
                         name: name.to_string(),
@@ -179,6 +178,7 @@ impl DependencyResolver {
         let mut sub_resolver = DependencyResolver::new(abs_path.clone());
         sub_resolver.resolved = self.resolved.clone();
         sub_resolver.resolving = self.resolving.clone();
+        sub_resolver.local_registry = LocalRegistry::new();
 
         let transitive_deps = sub_resolver.resolve(&dep_manifest)?;
 
@@ -204,10 +204,69 @@ impl DependencyResolver {
         Ok(Some(resolved))
     }
 
-    /// Get all resolved dependencies in build order (dependencies first)
+    /// Get all resolved dependencies in topological build order (dependencies first)
     pub fn build_order(&self) -> Vec<&ResolvedDep> {
-        // For now, just return all deps (simple topological order not needed for path deps)
-        self.resolved.values().collect()
+        let names: Vec<String> = self.resolved.keys().cloned().collect();
+        let mut visited = HashSet::new();
+        let mut order = Vec::new();
+
+        for name in &names {
+            self.topo_visit(name, &mut visited, &mut order);
+        }
+
+        order.iter()
+            .filter_map(|name| self.resolved.get(name))
+            .collect()
+    }
+
+    /// DFS topological sort helper
+    fn topo_visit<'a>(&self, name: &str, visited: &mut HashSet<String>, order: &mut Vec<String>) {
+        if visited.contains(name) {
+            return;
+        }
+        visited.insert(name.to_string());
+
+        // Visit dependencies first
+        if let Some(deps) = self.dep_edges.get(name) {
+            for dep in deps {
+                self.topo_visit(dep, visited, order);
+            }
+        }
+
+        order.push(name.to_string());
+    }
+
+    /// Resolve a version-only dependency via local registry
+    fn resolve_version_dep(&self, name: &str, version: &str) -> Result<String, ResolveError> {
+        // Try local registry first
+        match self.local_registry.resolve_version(name, version) {
+            Ok(resolved_version) => {
+                match self.local_registry.get_package_path(name, &resolved_version) {
+                    Ok(path) => {
+                        eprintln!("   Resolved: {} @ {} (local registry)", name, resolved_version);
+                        Ok(path.to_string_lossy().to_string())
+                    }
+                    Err(_) => Err(ResolveError::DependencyNotFound {
+                        name: name.to_string(),
+                        path: format!("registry version {} not found on disk", resolved_version),
+                    }),
+                }
+            }
+            Err(_) => {
+                // Not in local registry — try gotgan-packages dir as fallback
+                let packages_dir = self.root.join("packages");
+                let pkg_path = packages_dir.join(name);
+                if pkg_path.exists() && pkg_path.join("gotgan.toml").exists() {
+                    eprintln!("   Resolved: {} (packages directory)", name);
+                    Ok(pkg_path.to_string_lossy().to_string())
+                } else {
+                    Err(ResolveError::DependencyNotFound {
+                        name: name.to_string(),
+                        path: format!("version '{}' not found in local registry or packages/", version),
+                    })
+                }
+            }
+        }
     }
 
     /// Resolve a git dependency (Go-style: github.com/user/repo)
