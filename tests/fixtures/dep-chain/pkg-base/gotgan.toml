@@ -1,0 +1,6 @@
+[package]
+name = "pkg-base"
+version = "0.1.0"
+description = "Base package — no dependencies"
+
+[dependencies]

@@ -1,0 +1,14 @@
+// pkg-top: Top-level using pkg-mid (which uses pkg-base transitively)
+
+use pkg_mid::six_times;
+use pkg_mid::quadruple;
+
+pub fn twenty_four_times(x: i64) -> i64
+  post ret == x * 24
+= six_times(quadruple(x));
+
+fn main() -> i64 = {
+    let result = twenty_four_times(5);
+    println(result);
+    result
+};

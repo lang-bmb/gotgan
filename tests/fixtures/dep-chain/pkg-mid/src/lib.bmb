@@ -1,0 +1,12 @@
+// pkg-mid: Intermediate utilities using pkg-base
+
+use pkg_base::double;
+use pkg_base::triple;
+
+pub fn six_times(x: i64) -> i64
+  post ret == x * 6
+= double(triple(x));
+
+pub fn quadruple(x: i64) -> i64
+  post ret == x * 4
+= double(double(x));

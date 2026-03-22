@@ -185,9 +185,11 @@ impl ProjectContext {
         let src_dir = root.join("src");
         let target_dir = root.join("target");
 
-        // Resolve local path dependencies
+        // Resolve local path dependencies (including transitive)
         let mut resolver = DependencyResolver::new(root.clone());
-        let dependencies = resolver.resolve(&manifest)?;
+        let _direct = resolver.resolve(&manifest)?;
+        // v0.97: Use build_order() to include transitive deps in topological order
+        let dependencies: Vec<ResolvedDep> = resolver.build_order().into_iter().cloned().collect();
 
         if !dependencies.is_empty() {
             println!(
@@ -561,7 +563,22 @@ pub fn run_build(opts: BuildOptions) -> Result<(), BuildError> {
     let main_str = main_file.to_string_lossy();
     let output_str = output.to_string_lossy();
 
-    let mut args = vec!["build", &main_str, "-o", &output_str];
+    // v0.97: Pass dependency parent dirs as include paths for module resolution
+    // BMB's -I resolves: include_path/pkg_name/src/lib.bmb
+    // So we pass the parent directory of each dependency
+    let dep_include_args: Vec<String> = ctx.dependencies.iter()
+        .filter_map(|dep| dep.path.parent().map(|p| p.to_string_lossy().to_string()))
+        .collect();
+    // Deduplicate (multiple deps may share a parent)
+    let dep_include_args: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        dep_include_args.into_iter().filter(|p| seen.insert(p.clone())).collect()
+    };
+    let mut args: Vec<&str> = vec!["build", &main_str, "-o", &output_str];
+    for dep_path in &dep_include_args {
+        args.push("-I");
+        args.push(dep_path);
+    }
     if opts.release {
         args.push("--aggressive");
     }
@@ -640,10 +657,25 @@ pub fn run_check() -> Result<(), BuildError> {
     // Get all source files
     let sources = ctx.source_files()?;
 
+    // v0.97: Build include path args for dependency module resolution
+    // BMB's -I resolves: include_path/pkg_name/src/lib.bmb
+    let dep_include_args: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        ctx.dependencies.iter()
+            .filter_map(|dep| dep.path.parent().map(|p| p.to_string_lossy().to_string()))
+            .filter(|p| seen.insert(p.clone()))
+            .collect()
+    };
+
     // Check each file
     for source in &sources {
         let source_str = source.to_string_lossy();
-        run_bmb(&["check", &source_str])?;
+        let mut args: Vec<&str> = vec!["check", &source_str];
+        for dep_path in &dep_include_args {
+            args.push("-I");
+            args.push(dep_path);
+        }
+        run_bmb(&args)?;
     }
 
     println!("    Finished type checking");

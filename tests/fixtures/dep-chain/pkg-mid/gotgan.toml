@@ -1,0 +1,7 @@
+[package]
+name = "pkg-mid"
+version = "0.1.0"
+description = "Middle package — depends on pkg-base"
+
+[dependencies]
+pkg-base = { path = "../pkg-base" }

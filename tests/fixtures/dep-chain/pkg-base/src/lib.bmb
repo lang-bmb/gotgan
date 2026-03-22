@@ -1,0 +1,13 @@
+// pkg-base: Foundational utilities
+
+pub fn double(x: i64) -> i64
+  post ret == x * 2
+= x * 2;
+
+pub fn triple(x: i64) -> i64
+  post ret == x * 3
+= x * 3;
+
+pub fn is_positive(x: i64) -> bool
+  post ret == (x > 0)
+= x > 0;
