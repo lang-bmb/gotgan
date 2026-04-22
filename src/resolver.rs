@@ -220,7 +220,7 @@ impl DependencyResolver {
     }
 
     /// DFS topological sort helper
-    fn topo_visit<'a>(&self, name: &str, visited: &mut HashSet<String>, order: &mut Vec<String>) {
+    fn topo_visit(&self, name: &str, visited: &mut HashSet<String>, order: &mut Vec<String>) {
         if visited.contains(name) {
             return;
         }
