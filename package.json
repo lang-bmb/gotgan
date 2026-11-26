@@ -1,0 +1,13 @@
+{
+  "name": "gotgan",
+  "version": "0.1.0",
+  "summary": "The package manager of BMB: reads a package's declaration and checks, proves, tests and builds the package with the compiler",
+  "licence": "MIT",
+  "units": ["cases", "commands", "decl", "main", "skeleton", "text", "tool"],
+  "deps": {
+    "std": ["json", "num", "slice", "utf8"]
+  },
+  "bin": {
+    "gotgan": "main"
+  }
+}

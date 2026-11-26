@@ -1,0 +1,135 @@
+#[summary("Running the compiler and other programs, and reading the JSONL rows the compiler writes")]
+mod tool {
+    #[summary("What gotgan reads of one row of the compiler: the line itself, def (verify) or path (query status) names the definition, and code is set on a diagnostic. A member that is missing reads as empty text or 0")]
+    struct Row { line: String, def: String, path: String, code: String, status: String, obligations: u64, rlimit: u64, rlimit_max: u64, trust: String, termination: String, escapes: u64 }
+
+    #[summary("Runs the compiler with args and no standard input; when it cannot be started, says so on standard error and ends gotgan with exit code 2")]
+    #[effects(alloc, io, nondet)]
+    fn bmb(args: &[String]) -> std::process::Output {
+        let none: Vec<u8> = Vec::new();
+        let c: String = compiler();
+        match run(c.as_str(), args, none.as_slice()) {
+            Ok(o) => o,
+            Err(why) => { eprint_str("gotgan: "); eprint_str(why.as_str()); eprint_str(" (set BMB to the compiler)\n"); std::process::exit(2); },
+        }
+    }
+
+    #[summary("The compiler: the value of BMB, or bmb on PATH when BMB is not set or empty")]
+    #[effects(alloc, io, nondet)]
+    fn compiler() -> String {
+        match std::env::var("BMB") {
+            None => String::from("bmb"),
+            Some(b) => { if b.len() == 0 { String::from("bmb") } else { b } },
+        }
+    }
+
+    #[summary("Writes the bytes b to standard error, as text when they are UTF-8")]
+    #[effects(alloc, io)]
+    fn eprint_bytes(b: &[u8]) -> () {
+        let mut v: Vec<u8> = Vec::new();
+        for k in 0..b.len()
+            invariant k <= b.len(),
+        {
+            v.push(b[k]);
+        }
+        match String::from_utf8(v) {
+            Ok(s) => eprint_str(s.as_str()),
+            Err(bad) => eprint_str("(output that is not UTF-8)\n"),
+        }
+    }
+
+    #[summary("Where the line that starts at i of b ends: the next newline, or the end of b")]
+    #[effects(pure)]
+    fn line_end(b: &[u8], i: usize) -> (r: usize)
+        requires i <= b.len(),
+        ensures i <= r && r <= b.len(),
+    {
+        let mut k: usize = i;
+        while k < b.len() && b[k] != 10
+            invariant i <= k, k <= b.len(),
+            decreases b.len() - k,
+        {
+            k = k + 1;
+        }
+        k
+    }
+
+    #[summary("The number of member key of the row object of t, 0 when it is missing, negative or not an integer")]
+    #[effects(pure)]
+    #[uses(std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn number_of(d: &std::json::Doc, t: &[u8], key: &str) -> u64
+        requires std::json::of_text(d, t),
+    {
+        match d.member(t, 0, key) {
+            None => 0,
+            Some(n) => match d.i64_value(t, n) { None => 0, Some(v) => { if v < 0 { 0 } else { v as u64 } }, },
+        }
+    }
+
+    #[summary("The row of the line t, none when it is not a JSON object in UTF-8")]
+    #[effects(alloc)]
+    #[uses(std::json::doc_sound, std::json::nodes_in, std::json::of_text, std::json::parsed)]
+    fn read_row(t: &[u8]) -> Option<Row> {
+        if t.len() > 16777216 {
+            return None;
+        }
+        let d: std::json::Doc = std::json::parse(t)?;
+        if d.kind(0) != 6 {
+            return None;
+        }
+        let mut copy: Vec<u8> = Vec::new();
+        for k in 0..t.len()
+            invariant k <= t.len(),
+        {
+            copy.push(t[k]);
+        }
+        let line: String = match String::from_utf8(copy) {
+            Ok(l) => l,
+            Err(bad) => { return None; },
+        };
+        Some(Row { line: line, def: text_of(&d, t, "def"), path: text_of(&d, t, "path"), code: text_of(&d, t, "code"), status: text_of(&d, t, "status"), obligations: number_of(&d, t, "obligations"), rlimit: number_of(&d, t, "rlimit"), rlimit_max: number_of(&d, t, "rlimit_max"), trust: text_of(&d, t, "trust"), termination: text_of(&d, t, "termination"), escapes: number_of(&d, t, "escapes") })
+    }
+
+    #[summary("The rows of the JSONL output out, one for each line that is a JSON object")]
+    #[effects(alloc)]
+    fn rows(out: &[u8]) -> Vec<Row> {
+        let mut v: Vec<Row> = Vec::new();
+        let mut i: usize = 0;
+        while i < out.len()
+            invariant i <= out.len(),
+            decreases out.len() - i,
+        {
+            let e: usize = line_end(out, i);
+            match read_row(&out[i..e]) {
+                None => {},
+                Some(r) => v.push(r),
+            }
+            if e >= out.len() {
+                return v;
+            }
+            i = e + 1;
+        }
+        v
+    }
+
+    #[summary("Runs prog with args and the standard input input, and gives its exit status, standard output and standard error; an error when it cannot be started")]
+    #[effects(alloc, io, nondet)]
+    fn run(prog: &str, args: &[String], input: &[u8]) -> Result<std::process::Output, String> {
+        match std::process::run(prog, args, input) {
+            Ok(o) => Ok(o),
+            Err(e) => Err(text::cat4("cannot run ", prog, ": ", e.message.as_str())),
+        }
+    }
+
+    #[summary("The text of member key of the row object of t, empty when it is missing or not text")]
+    #[effects(alloc)]
+    #[uses(std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn text_of(d: &std::json::Doc, t: &[u8], key: &str) -> String
+        requires std::json::of_text(d, t),
+    {
+        match d.member(t, 0, key) {
+            None => String::new(),
+            Some(n) => match d.string_value(t, n) { None => String::new(), Some(s) => s, },
+        }
+    }
+}

@@ -1,0 +1,81 @@
+#[summary("gotgan new: the skeleton of a package, its declaration, one unit with one proved function, a test suite that runs it, and an ORIGIN.md to fill in")]
+mod skeleton {
+    #[summary("The text of tests/cases.txt of a new package")]
+    #[effects(alloc)]
+    fn cases() -> String {
+        String::from("# Test cases, one per line: ARGS|STDIN|STDOUT. ARGS are the arguments of\n# tests/driver.bmb (separated by spaces), STDIN what it reads on standard\n# input and STDOUT what it must write on standard output (the driver ends it\n# with a newline), written with the escapes \\\\, \\xHH, \\n, \\r and \\t. Lines that start with # are comments.\n|banana|3\\n\n|xyz|0\\n\n|\\x61\\x61|2\\n\n")
+    }
+
+    #[summary("The text of package.json of a new package name")]
+    #[effects(alloc)]
+    fn declaration(name: &str) -> String {
+        let mut s: String = String::from("{\n  \"name\": \"");
+        s.push_str(name);
+        s.push_str("\",\n  \"version\": \"0.1.0\",\n  \"summary\": \"What the package is, in one sentence\",\n  \"units\": [\"");
+        s.push_str(name);
+        s.push_str("\"],\n  \"deps\": {\n    \"std\": []\n  },\n  \"tests\": [\n    {\n      \"units\": [\"driver\"],\n      \"cases\": [\"cases.txt\"],\n      \"format\": \"args|stdin|stdout\"\n    }\n  ]\n}\n");
+        s
+    }
+
+    #[summary("The text of tests/driver.bmb of a new package name, in normal form: writes how many bytes of standard input are a")]
+    #[effects(alloc)]
+    fn driver(name: &str) -> String {
+        let mut s: String = String::from("#[summary(\"Test driver of the package ");
+        s.push_str(name);
+        s.push_str(": writes how many bytes of standard input are the letter a\")]\nmod driver {\n    #[effects(alloc, io, nondet)]\n    fn main() -> () {\n        let mut input: Vec<u8> = Vec::new();\n        match std::io::read_to_end(&mut input) {\n            Ok(n) => {},\n            Err(e) => { eprint_str(\"driver: cannot read standard input\\n\"); std::process::exit(2); },\n        }\n        let n: usize = ");
+        s.push_str(name);
+        s.push_str("::count(input.as_slice(), b'a');\n        print_u64(n as u64);\n    }\n}\n");
+        s
+    }
+
+    #[summary("Makes the directory path and those above it; says so on standard error and gives false when it cannot")]
+    #[effects(alloc, io)]
+    fn make_dir(path: &str) -> bool {
+        match std::fs::create_dir_all(path) {
+            Ok(u) => true,
+            Err(e) => { eprint_str("gotgan: new: cannot make "); eprint_str(path); eprint_str(": "); eprint_str(e.message.as_str()); eprint_str("\n"); false },
+        }
+    }
+
+    #[summary("The text of ORIGIN.md of a new package name")]
+    #[effects(alloc)]
+    fn origin(name: &str) -> String {
+        let mut s: String = String::from("# Origin of the `");
+        s.push_str(name);
+        s.push_str("` package\n\nWhere the package comes from (a crate and its version, a repository and its commit), its licence and attribution, what was changed in porting and why, and what was left out. A package written from scratch says so here.\n");
+        s
+    }
+
+    #[summary("The text of src/<name>.bmb of a new package name, in normal form: the unit name with one function and its contract")]
+    #[effects(alloc)]
+    fn unit(name: &str) -> String {
+        let mut s: String = String::from("#[summary(\"What the unit ");
+        s.push_str(name);
+        s.push_str(" holds\")]\nmod ");
+        s.push_str(name);
+        s.push_str(" {\n    #[summary(\"How many bytes of data are b\")]\n    #[effects(pure)]\n    fn count(data: &[u8], b: u8) -> (r: usize)\n        ensures r <= data.len(),\n    {\n        let mut n: usize = 0;\n        for i in 0..data.len()\n            invariant n <= i,\n        {\n            if data[i] == b {\n                n = n + 1;\n            }\n        }\n        n\n    }\n}\n");
+        s
+    }
+
+    #[summary("Writes text to the new file path; says so on standard error and gives false when it exists or cannot be written")]
+    #[effects(alloc, io)]
+    fn write(path: &str, text: &str) -> bool {
+        match std::fs::write_new(path, text.as_bytes()) {
+            Ok(u) => true,
+            Err(e) => { eprint_str("gotgan: new: cannot write "); eprint_str(path); eprint_str(": "); eprint_str(e.message.as_str()); eprint_str("\n"); false },
+        }
+    }
+
+    #[summary("Writes the skeleton of the package name into the directory dir: package.json, src/<name>.bmb, tests/driver.bmb, tests/cases.txt and ORIGIN.md. No file that exists is written over. The name must be able to name a unit and not be driver, the name of the skeleton's test unit")]
+    #[effects(alloc, io)]
+    fn write_package(dir: &str, name: &str) -> bool
+        requires decl::unit_name(name),
+    {
+        let src: String = text::cat2(dir, "/src");
+        let tests: String = text::cat2(dir, "/tests");
+        if !make_dir(src.as_str()) || !make_dir(tests.as_str()) {
+            return false;
+        }
+        write(text::cat2(dir, "/package.json").as_str(), declaration(name).as_str()) && write(text::cat5(dir, "/src/", name, ".bmb", "").as_str(), unit(name).as_str()) && write(text::cat2(dir, "/tests/driver.bmb").as_str(), driver(name).as_str()) && write(text::cat2(dir, "/tests/cases.txt").as_str(), cases().as_str()) && write(text::cat2(dir, "/ORIGIN.md").as_str(), origin(name).as_str())
+    }
+}

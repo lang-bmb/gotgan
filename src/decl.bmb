@@ -1,0 +1,658 @@
+#[summary("The package declaration (package.json): what a valid declaration is, as the invariant of the type Package, and reading one from its JSON text. A declaration names the package, its version and summary, its units (src/<unit>.bmb each), the standard library units it uses, its executables and its test suites")]
+mod decl {
+    #[summary("A valid package declaration (the invariant valid). The executables are bin_names, each with the position in units of its entry unit, the unit that holds its fn main, in bin_entries")]
+    #[invariant(valid)]
+    struct Package { name: String, version: String, summary: String, units: Vec<String>, std: Vec<String>, bin_names: Vec<String>, bin_entries: Vec<usize>, tests: Vec<Suite> }
+
+    #[summary("A test suite: the test units (tests/<unit>.bmb each) built together with the package's units into one driver, the case files it runs (tests/<file> each) and the format of those files")]
+    #[invariant(suite_sound)]
+    struct Suite { units: Vec<String>, cases: Vec<String>, format: String }
+
+    spec fn absent(v: &[String], s: &str) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] v[k] != s
+    }
+
+    spec fn apart(a: &[String], b: &[String]) -> bool {
+        forall|i: usize, j: usize| i < a.len() && j < b.len() ==> #[trigger] a[i] != #[trigger] b[j]
+    }
+
+    #[summary("The first of v that is not a file name, none when all are")]
+    #[effects(pure)]
+    #[uses(files)]
+    fn bad_file(v: &[String]) -> (r: Option<usize>)
+        ensures first_bad_file(r, v),
+    {
+        for k in 0..v.len()
+            invariant forall|m: usize| m < k ==> #[trigger] file_name(v[m].as_str()),
+        {
+            if !is_file(v[k].as_str()) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[summary("The first of v that cannot name a unit, none when all can")]
+    #[effects(pure)]
+    #[uses(idents)]
+    fn bad_ident(v: &[String]) -> (r: Option<usize>)
+        ensures first_bad_ident(r, v),
+    {
+        for k in 0..v.len()
+            invariant forall|m: usize| m < k ==> #[trigger] unit_name(v[m].as_str()),
+        {
+            if !is_unit_name(v[k].as_str()) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[summary("The first of v that is not a unit of the standard library, none when all are")]
+    #[effects(pure)]
+    #[uses(std_units)]
+    fn bad_std(v: &[String]) -> (r: Option<usize>)
+        ensures first_bad_std(r, v),
+    {
+        for k in 0..v.len()
+            invariant forall|m: usize| m < k ==> #[trigger] std_unit(v[m].as_str()),
+        {
+            if !is_std(v[k].as_str()) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    spec fn bin_names_ok(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] ident(v[k].as_str())
+    }
+
+    #[summary("The standard library units that the deps object node dn names, into out (cleared first): deps has only the member std, an array of distinct units of the standard library")]
+    #[effects(alloc)]
+    #[uses(first_bad_std, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn deps(d: &std::json::Doc, t: &[u8], dn: usize, out: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::node_pos(d, dn), same_text(d, t),
+        ensures std_units(out.as_slice()), distinct(out.as_slice()),
+    {
+        *out = Vec::new();
+        let mut ks: Vec<String> = Vec::new();
+        keys(d, t, dn, "package.json: `deps`", &mut ks)?;
+        for k in 0..ks.len()
+            invariant k <= ks.len(), std_units(out.as_slice()), distinct(out.as_slice()),
+        {
+            if ks[k] != "std" {
+                return Err(text::cat3("package.json: `deps` has the member `", ks[k].as_str(), "`: only `std` (units of the standard library) is understood; dependencies on other packages are not part of the declaration yet"));
+            }
+        }
+        match d.member(t, dn, "std") {
+            None => {},
+            Some(sn) => { let mut names: Vec<String> = Vec::new(); strings(d, t, sn, "package.json: `deps.std`", &mut names)?; match bad_std(names.as_slice()) { None => {}, Some(b) => { return Err(text::cat3("package.json: `deps.std` names `", names[b].as_str(), "`, which is not a unit of the standard library (base64, bytes, collections, crc32, intern, json, num, sha256, slice, str, utf8)")); }, } *out = names; },
+        }
+        Ok(())
+    }
+
+    spec fn digit(b: u8) -> bool {
+        48 <= b && b <= 57
+    }
+
+    spec fn distinct(v: &[String]) -> bool {
+        forall|i: usize, j: usize| i < j && j < v.len() ==> #[trigger] v[i] != #[trigger] v[j]
+    }
+
+    spec fn entries_ok(e: &[usize], n: usize) -> bool {
+        (forall|k: usize| k < e.len() ==> #[trigger] e[k] < n) && (forall|i: usize, j: usize| i < j && j < e.len() ==> #[trigger] e[i] != #[trigger] e[j])
+    }
+
+    #[summary("The executables that the bin object node bn declares, their names into out and the positions in units of their entry units into entries (both cleared first): each member is the name of an executable and its value the name of its entry unit, one of units, and no two executables share an entry unit")]
+    #[effects(alloc)]
+    #[uses(placed, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn executables(d: &std::json::Doc, t: &[u8], bn: usize, units: &[String], out: &mut Vec<String>, entries: &mut Vec<usize>) -> (r: Result<(), String>)
+        requires std::json::node_pos(d, bn), same_text(d, t),
+        ensures out.len() == entries.len(), bin_names_ok(out.as_slice()), distinct(out.as_slice()), entries_ok(entries.as_slice(), units.len()),
+    {
+        *out = Vec::new();
+        *entries = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        keys(d, t, bn, "package.json: `bin`", &mut names)?;
+        for k in 0..names.len()
+            invariant k <= names.len(), out.len() == entries.len(), bin_names_ok(out.as_slice()), distinct(out.as_slice()), entries_ok(entries.as_slice(), units.len()),
+        {
+            if !is_ident(names[k].as_str()) {
+                return Err(text::cat3("package.json: the executable `", names[k].as_str(), "` is not a name (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter)"));
+            }
+            let unit: String = match d.member(t, bn, names[k].as_str()) {
+                None => { return Err(text::cat3("package.json: `bin.", names[k].as_str(), "` is missing")); },
+                Some(v) => match d.string_value(t, v) { None => { return Err(text::cat3("package.json: `bin.", names[k].as_str(), "` is not text (the name of its entry unit)")); }, Some(u) => u, },
+            };
+            let unit_index: usize = match position(units, unit.as_str()) {
+                None => { return Err(text::cat5("package.json: the entry unit `", unit.as_str(), "` of the executable `", names[k].as_str(), "` is not one of `units`")); },
+                Some(e) => e,
+            };
+            if taken(entries.as_slice(), unit_index) {
+                return Err(text::cat3("package.json: two executables have the entry unit `", unit.as_str(), "`"));
+            }
+            match position(out.as_slice(), names[k].as_str()) {
+                None => {},
+                Some(at) => { return Err(text::cat3("package.json: the executable `", names[k].as_str(), "` comes twice")); },
+            }
+            push_name(out, names[k].clone());
+            push_entry(entries, unit_index, units.len());
+        }
+        Ok(())
+    }
+
+    spec fn file_byte(b: u8) -> bool {
+        97 <= b && b <= 122 || 65 <= b && b <= 90 || 48 <= b && b <= 57 || b == 95 || b == 45 || b == 46
+    }
+
+    #[summary("A file name of tests/: 1 to 64 bytes of ASCII letters, digits, _, - and ., the first not a dot")]
+    spec fn file_name(s: &str) -> bool {
+        0 < s.len() && s.len() <= 64 && s.as_bytes()[0] != 46 && (forall|k: usize| k < s.len() ==> file_byte(#[trigger] s.as_bytes()[k]))
+    }
+
+    spec fn files(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] file_name(v[k].as_str())
+    }
+
+    spec fn first_bad_file(r: Option<usize>, v: &[String]) -> bool {
+        match r {
+            None => files(v),
+            Some(k) => k < v.len() && !file_name(v[k].as_str()),
+        }
+    }
+
+    spec fn first_bad_ident(r: Option<usize>, v: &[String]) -> bool {
+        match r {
+            None => idents(v),
+            Some(k) => k < v.len() && !unit_name(v[k].as_str()),
+        }
+    }
+
+    spec fn first_bad_std(r: Option<usize>, v: &[String]) -> bool {
+        match r {
+            None => std_units(v),
+            Some(k) => k < v.len() && !std_unit(v[k].as_str()),
+        }
+    }
+
+    spec fn first_shared(r: Option<usize>, a: &[String], b: &[String]) -> bool {
+        match r {
+            None => apart(a, b),
+            Some(i) => i < a.len() && !absent(b, a[i].as_str()),
+        }
+    }
+
+    spec fn free(e: &[usize], x: usize) -> bool {
+        forall|k: usize| k < e.len() ==> #[trigger] e[k] != x
+    }
+
+    #[summary("A name of a package or an executable: 1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter")]
+    spec fn ident(s: &str) -> bool {
+        0 < s.len() && s.len() <= 64 && 97 <= s.as_bytes()[0] && s.as_bytes()[0] <= 122 && (forall|k: usize| k < s.len() ==> ident_byte(#[trigger] s.as_bytes()[k]))
+    }
+
+    spec fn ident_byte(b: u8) -> bool {
+        97 <= b && b <= 122 || 48 <= b && b <= 57 || b == 95
+    }
+
+    spec fn idents(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] unit_name(v[k].as_str())
+    }
+
+    #[summary("Whether s is the name of a file of tests/: 1 to 64 bytes of ASCII letters, digits, _, - and ., the first not a dot")]
+    #[effects(pure)]
+    #[uses(file_byte, file_name)]
+    fn is_file(s: &str) -> (r: bool)
+        ensures r == file_name(s),
+    {
+        let n: usize = s.len();
+        if n == 0 || n > 64 || s.as_bytes()[0] == 46 {
+            return false;
+        }
+        for k in 0..n
+            invariant forall|m: usize| m < k ==> file_byte(#[trigger] s.as_bytes()[m]),
+        {
+            let c: u8 = s.as_bytes()[k];
+            if !(97 <= c && c <= 122 || 65 <= c && c <= 90 || 48 <= c && c <= 57 || c == 95 || c == 45 || c == 46) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[summary("Whether s is a name of a package or an executable: 1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter")]
+    #[effects(pure)]
+    #[uses(ident, ident_byte)]
+    fn is_ident(s: &str) -> (r: bool)
+        ensures r == ident(s),
+    {
+        let n: usize = s.len();
+        if n == 0 || n > 64 || s.as_bytes()[0] < 97 || s.as_bytes()[0] > 122 {
+            return false;
+        }
+        for k in 0..n
+            invariant forall|m: usize| m < k ==> ident_byte(#[trigger] s.as_bytes()[m]),
+        {
+            let c: u8 = s.as_bytes()[k];
+            if !(97 <= c && c <= 122 || 48 <= c && c <= 57 || c == 95) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[summary("Whether s names a unit of the standard library that the compiler carries")]
+    #[effects(pure)]
+    #[uses(std_unit)]
+    fn is_std(s: &str) -> (r: bool)
+        ensures r == std_unit(s),
+    {
+        s == "base64" || s == "bytes" || s == "collections" || s == "crc32" || s == "intern" || s == "json" || s == "num" || s == "sha256" || s == "slice" || s == "str" || s == "utf8"
+    }
+
+    #[summary("Whether s can name a unit: a name that is not a reserved word of the language or std")]
+    #[effects(pure)]
+    #[uses(reserved, unit_name)]
+    fn is_unit_name(s: &str) -> (r: bool)
+        ensures r == unit_name(s),
+    {
+        is_ident(s) && !(s == "fn" || s == "spec" || s == "proof" || s == "mod" || s == "let" || s == "mut" || s == "while" || s == "if" || s == "else" || s == "true" || s == "false" || s == "requires" || s == "ensures" || s == "decreases" || s == "invariant" || s == "forall" || s == "exists" || s == "old" || s == "assert" || s == "assume" || s == "return" || s == "for" || s == "loop" || s == "match" || s == "break" || s == "continue" || s == "as" || s == "pub" || s == "struct" || s == "enum" || s == "impl" || s == "trait" || s == "use" || s == "const" || s == "static" || s == "type" || s == "unsafe" || s == "self" || s == "crate" || s == "super" || s == "where" || s == "ref" || s == "move" || s == "dyn" || s == "in" || s == "async" || s == "await" || s == "std")
+    }
+
+    #[summary("Whether s is a version MAJOR.MINOR.PATCH: three non-empty runs of decimal digits joined by two dots")]
+    #[effects(pure)]
+    #[uses(digit, version)]
+    fn is_version(s: &str) -> (r: bool)
+        ensures r == version(s),
+    {
+        let n: usize = s.len();
+        let mut i: usize = 0;
+        let mut j: usize = 0;
+        let mut dots: usize = 0;
+        for k in 0..n
+            invariant dots <= 2, dots >= 1 ==> i < k && s.as_bytes()[i] == 46, dots == 2 ==> i < j && j < k && s.as_bytes()[j] == 46, forall|m: usize| m < k ==> dots >= 1 && m == i || dots == 2 && m == j || digit(#[trigger] s.as_bytes()[m]),
+        {
+            let c: u8 = s.as_bytes()[k];
+            if c == 46 {
+                if dots == 0 {
+                    i = k;
+                    dots = 1;
+                } else if dots == 1 {
+                    j = k;
+                    dots = 2;
+                } else {
+                    return false;
+                }
+            } else if c < 48 || c > 57 {
+                return false;
+            }
+        }
+        dots == 2 && 0 < i && i + 1 < j && j + 1 < n
+    }
+
+    #[summary("The member names of object node o of the JSON text t, in order, into out (cleared first). An error, naming the object as what, when o is not an object, when a name is written with an escape, or when a name comes twice")]
+    #[effects(alloc)]
+    #[uses(placed, std::json::after, std::json::doc_sound, std::json::node_count, std::json::nodes_in)]
+    fn keys(d: &std::json::Doc, t: &[u8], o: usize, what: &str, out: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::node_pos(d, o), same_text(d, t),
+        ensures distinct(out.as_slice()),
+    {
+        *out = Vec::new();
+        if d.kind(o) != 6 {
+            return Err(text::cat2(what, " is not a JSON object"));
+        }
+        let end: usize = d.next(o);
+        let mut c: usize = o + 1;
+        while c + 1 < end
+            invariant o < c, c <= d.nodes.len(), end <= d.nodes.len(), distinct(out.as_slice()),
+            decreases end - c,
+        {
+            let k: String = match d.string_value(t, c) {
+                None => { return Err(text::cat2(what, ": a member name is not text")); },
+                Some(k) => k,
+            };
+            if !d.raw_is(t, c, k.as_str()) {
+                return Err(text::cat4(what, ": the member name ", k.as_str(), " is written with an escape"));
+            }
+            match position(out.as_slice(), k.as_str()) {
+                None => {},
+                Some(at) => { return Err(text::cat4(what, ": the member `", k.as_str(), "` comes twice")); },
+            }
+            push_new(out, k);
+            c = d.next(c + 1);
+        }
+        Ok(())
+    }
+
+    #[summary("The text of member key of object node o; an error when it is missing or not text")]
+    #[effects(alloc)]
+    #[uses(std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn need_text(d: &std::json::Doc, t: &[u8], o: usize, key: &str) -> Result<String, String>
+        requires std::json::node_pos(d, o), same_text(d, t),
+    {
+        match d.member(t, o, key) {
+            None => Err(text::cat3("package.json: the member `", key, "` is missing")),
+            Some(n) => match d.string_value(t, n) { None => Err(text::cat3("package.json: `", key, "` is not text")), Some(v) => Ok(v), },
+        }
+    }
+
+    #[summary("Reads a declaration from the text t of package.json: a JSON object with the members name, version, summary and units, and optionally licence, deps, origin, bin and tests. Any other member, a member of the wrong kind, or a value that breaks the invariant of Package is an error that says which")]
+    #[effects(alloc)]
+    #[uses(first_bad_ident, first_bad_std, placed, same_text, std::json::doc_sound, std::json::nodes_in, std::json::parsed, std::json::some_node, valid)]
+    fn parse(t: &[u8]) -> Result<Package, String> {
+        if t.len() > 16777216 {
+            return Err(String::from("package.json: longer than 16 MiB"));
+        }
+        let d: std::json::Doc = match std::json::parse(t) {
+            None => { return Err(String::from("package.json: not a JSON text")); },
+            Some(d) => d,
+        };
+        let mut top: Vec<String> = Vec::new();
+        keys(&d, t, 0, "package.json", &mut top)?;
+        for k in 0..top.len()
+            invariant k <= top.len(),
+        {
+            if !top_key(top[k].as_str()) {
+                return Err(text::cat3("package.json: unknown member `", top[k].as_str(), "` (the members are name, version, summary, licence, units, deps, origin, bin and tests)"));
+            }
+        }
+        let name: String = need_text(&d, t, 0, "name")?;
+        if !is_ident(name.as_str()) {
+            return Err(text::cat3("package.json: the name `", name.as_str(), "` is not a name (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter)"));
+        }
+        let version: String = need_text(&d, t, 0, "version")?;
+        if !is_version(version.as_str()) {
+            return Err(text::cat3("package.json: the version `", version.as_str(), "` is not MAJOR.MINOR.PATCH"));
+        }
+        let summary: String = need_text(&d, t, 0, "summary")?;
+        match d.member(t, 0, "licence") {
+            None => {},
+            Some(l) => { if d.kind(l) != 4 { return Err(String::from("package.json: `licence` is not text")); } },
+        }
+        match d.member(t, 0, "origin") {
+            None => {},
+            Some(o) => { if d.kind(o) != 6 { return Err(String::from("package.json: `origin` is not a JSON object")); } },
+        }
+        let mut units: Vec<String> = Vec::new();
+        match d.member(t, 0, "units") {
+            None => { return Err(String::from("package.json: the member `units` is missing")); },
+            Some(u) => strings(&d, t, u, "package.json: `units`", &mut units)?,
+        }
+        if units.len() == 0 {
+            return Err(String::from("package.json: `units` is empty (a package has at least one unit)"));
+        }
+        match bad_ident(units.as_slice()) {
+            None => {},
+            Some(k) => { return Err(text::cat3("package.json: the unit `", units[k].as_str(), "` cannot name a unit (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, and not a reserved word or std)")); },
+        }
+        let mut std: Vec<String> = Vec::new();
+        match d.member(t, 0, "deps") {
+            None => {},
+            Some(dn) => deps(&d, t, dn, &mut std)?,
+        }
+        let mut bin_names: Vec<String> = Vec::new();
+        let mut bin_entries: Vec<usize> = Vec::new();
+        match d.member(t, 0, "bin") {
+            None => {},
+            Some(bn) => executables(&d, t, bn, units.as_slice(), &mut bin_names, &mut bin_entries)?,
+        }
+        let mut tests: Vec<Suite> = Vec::new();
+        match d.member(t, 0, "tests") {
+            None => {},
+            Some(tn) => suites(&d, t, tn, units.as_slice(), &mut tests)?,
+        }
+        Ok(Package { name: name, version: version, summary: summary, units: units, std: std, bin_names: bin_names, bin_entries: bin_entries, tests: tests })
+    }
+
+    spec fn placed(r: Option<usize>, v: &[String], s: &str) -> bool {
+        match r {
+            None => absent(v, s),
+            Some(k) => k < v.len() && v[k] == s,
+        }
+    }
+
+    #[summary("Where s is in v first, none when it is not there")]
+    #[effects(pure)]
+    #[uses(absent)]
+    fn position(v: &[String], s: &str) -> (r: Option<usize>)
+        ensures placed(r, v, s),
+    {
+        for k in 0..v.len()
+            invariant forall|m: usize| m < k ==> #[trigger] v[m] != s,
+        {
+            if v[k] == s {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[summary("Adds the position x of an entry unit among n units, which e does not hold, to the distinct positions e")]
+    #[effects(alloc)]
+    #[uses(entries_ok, free)]
+    fn push_entry(e: &mut Vec<usize>, x: usize, n: usize) -> ()
+        requires entries_ok(e.as_slice(), n), free(e.as_slice(), x), x < n,
+        ensures entries_ok(e.as_slice(), n), e.len() == old(e).len() + 1,
+    {
+        e.push(x);
+    }
+
+    #[summary("Adds the name s of an executable, which v does not hold, to the distinct names v")]
+    #[effects(alloc)]
+    #[uses(absent, bin_names_ok, distinct)]
+    fn push_name(v: &mut Vec<String>, s: String) -> ()
+        requires bin_names_ok(v.as_slice()), distinct(v.as_slice()), absent(v.as_slice(), s.as_str()), ident(s.as_str()),
+        ensures bin_names_ok(v.as_slice()), distinct(v.as_slice()), v.len() == old(v).len() + 1,
+    {
+        v.push(s);
+    }
+
+    #[summary("Adds s, which v does not hold, to the distinct texts v")]
+    #[effects(alloc)]
+    #[uses(absent, distinct)]
+    fn push_new(v: &mut Vec<String>, s: String) -> ()
+        requires distinct(v.as_slice()), absent(v.as_slice(), s.as_str()),
+        ensures distinct(v.as_slice()),
+    {
+        v.push(s);
+    }
+
+    #[summary("Adds the test suite s, whose units are not units of the package, to v")]
+    #[effects(alloc)]
+    #[uses(suites_apart)]
+    fn push_suite(v: &mut Vec<Suite>, s: Suite, units: &[String]) -> ()
+        requires suites_apart(v.as_slice(), units), apart(s.units.as_slice(), units),
+        ensures suites_apart(v.as_slice(), units),
+    {
+        v.push(s);
+    }
+
+    #[summary("A reserved word of the language, or std (the top-level unit of the standard library): neither can name a unit")]
+    spec fn reserved(s: &str) -> bool {
+        s == "fn" || s == "spec" || s == "proof" || s == "mod" || s == "let" || s == "mut" || s == "while" || s == "if" || s == "else" || s == "true" || s == "false" || s == "requires" || s == "ensures" || s == "decreases" || s == "invariant" || s == "forall" || s == "exists" || s == "old" || s == "assert" || s == "assume" || s == "return" || s == "for" || s == "loop" || s == "match" || s == "break" || s == "continue" || s == "as" || s == "pub" || s == "struct" || s == "enum" || s == "impl" || s == "trait" || s == "use" || s == "const" || s == "static" || s == "type" || s == "unsafe" || s == "self" || s == "crate" || s == "super" || s == "where" || s == "ref" || s == "move" || s == "dyn" || s == "in" || s == "async" || s == "await" || s == "std"
+    }
+
+    spec fn same_text(d: &std::json::Doc, t: &[u8]) -> bool {
+        d.len == t.len()
+    }
+
+    #[summary("The first of a that is also in b, none when they share none")]
+    #[effects(pure)]
+    #[uses(absent, apart)]
+    fn shared(a: &[String], b: &[String]) -> (r: Option<usize>)
+        ensures first_shared(r, a, b),
+    {
+        for i in 0..a.len()
+            invariant forall|m: usize, j: usize| m < i && j < b.len() ==> #[trigger] a[m] != #[trigger] b[j],
+        {
+            match position(b, a[i].as_str()) {
+                None => {},
+                Some(j) => { return Some(i); },
+            }
+        }
+        None
+    }
+
+    spec fn std_unit(s: &str) -> bool {
+        s == "base64" || s == "bytes" || s == "collections" || s == "crc32" || s == "intern" || s == "json" || s == "num" || s == "sha256" || s == "slice" || s == "str" || s == "utf8"
+    }
+
+    spec fn std_units(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] std_unit(v[k].as_str())
+    }
+
+    #[summary("The texts of array node a of the JSON text t, in order, into out (cleared first). An error, naming the array as what, when a is not an array, an element is not text, or a text comes twice")]
+    #[effects(alloc)]
+    #[uses(placed, std::json::after, std::json::doc_sound, std::json::node_count, std::json::nodes_in)]
+    fn strings(d: &std::json::Doc, t: &[u8], a: usize, what: &str, out: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::node_pos(d, a), same_text(d, t),
+        ensures distinct(out.as_slice()),
+    {
+        *out = Vec::new();
+        if d.kind(a) != 5 {
+            return Err(text::cat2(what, " is not a JSON array"));
+        }
+        let end: usize = d.next(a);
+        let mut c: usize = a + 1;
+        while c < end
+            invariant a < c, c <= d.nodes.len(), end <= d.nodes.len(), distinct(out.as_slice()),
+            decreases end - c,
+        {
+            let v: String = match d.string_value(t, c) {
+                None => { return Err(text::cat2(what, ": an element is not text")); },
+                Some(v) => v,
+            };
+            match position(out.as_slice(), v.as_str()) {
+                None => {},
+                Some(at) => { return Err(text::cat4(what, ": `", v.as_str(), "` comes twice")); },
+            }
+            push_new(out, v);
+            c = d.next(c);
+        }
+        Ok(())
+    }
+
+    #[summary("Whether k is a member of a test suite")]
+    #[effects(pure)]
+    fn suite_key(k: &str) -> bool {
+        k == "units" || k == "cases" || k == "format"
+    }
+
+    #[summary("The invariant of Suite: at least one test unit, each able to name a unit and distinct, at least one case file, each a file name and distinct, and the format args|stdin|stdout")]
+    spec fn suite_sound(s: &Suite) -> bool {
+        0 < s.units.len() && idents(s.units.as_slice()) && distinct(s.units.as_slice()) && 0 < s.cases.len() && files(s.cases.as_slice()) && distinct(s.cases.as_slice()) && the_format(s.format.as_str())
+    }
+
+    #[summary("The test suites that the tests array node tn declares, into out (cleared first): each element is an object with the members units (test units, none of them a unit of the package), cases (files of tests/) and format (args|stdin|stdout)")]
+    #[effects(alloc)]
+    #[uses(first_bad_file, first_bad_ident, first_shared, std::json::after, std::json::doc_sound, std::json::node_count, std::json::nodes_in, std::json::some_node, suite_sound, the_format)]
+    fn suites(d: &std::json::Doc, t: &[u8], tn: usize, units: &[String], out: &mut Vec<Suite>) -> (r: Result<(), String>)
+        requires std::json::node_pos(d, tn), same_text(d, t),
+        ensures suites_apart(out.as_slice(), units),
+    {
+        *out = Vec::new();
+        if d.kind(tn) != 5 {
+            return Err(String::from("package.json: `tests` is not a JSON array"));
+        }
+        let end: usize = d.next(tn);
+        let mut c: usize = tn + 1;
+        while c < end
+            invariant tn < c, c <= d.nodes.len(), end <= d.nodes.len(), suites_apart(out.as_slice(), units),
+            decreases end - c,
+        {
+            let mut ks: Vec<String> = Vec::new();
+            keys(d, t, c, "package.json: a test suite", &mut ks)?;
+            for k in 0..ks.len()
+                invariant k <= ks.len(),
+            {
+                if !suite_key(ks[k].as_str()) {
+                    return Err(text::cat3("package.json: a test suite has the member `", ks[k].as_str(), "` (the members are units, cases and format)"));
+                }
+            }
+            let mut tu: Vec<String> = Vec::new();
+            match d.member(t, c, "units") {
+                None => { return Err(String::from("package.json: a test suite has no `units`")); },
+                Some(u) => strings(d, t, u, "package.json: the `units` of a test suite", &mut tu)?,
+            }
+            if tu.len() == 0 {
+                return Err(String::from("package.json: the `units` of a test suite is empty"));
+            }
+            match bad_ident(tu.as_slice()) {
+                None => {},
+                Some(b) => { return Err(text::cat3("package.json: the test unit `", tu[b].as_str(), "` cannot name a unit (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, and not a reserved word or std)")); },
+            }
+            match shared(tu.as_slice(), units) {
+                None => {},
+                Some(b2) => { return Err(text::cat3("package.json: the test unit `", tu[b2].as_str(), "` has the name of a unit of the package")); },
+            }
+            let mut cases: Vec<String> = Vec::new();
+            match d.member(t, c, "cases") {
+                None => { return Err(String::from("package.json: a test suite has no `cases`")); },
+                Some(cn) => strings(d, t, cn, "package.json: the `cases` of a test suite", &mut cases)?,
+            }
+            if cases.len() == 0 {
+                return Err(String::from("package.json: the `cases` of a test suite is empty"));
+            }
+            match bad_file(cases.as_slice()) {
+                None => {},
+                Some(b3) => { return Err(text::cat3("package.json: the case file `", cases[b3].as_str(), "` is not the name of a file of tests/ (1 to 64 bytes of ASCII letters, digits, _, - and ., the first not a dot)")); },
+            }
+            let format: String = match d.member(t, c, "format") {
+                None => { return Err(String::from("package.json: a test suite has no `format`")); },
+                Some(fnode) => match d.string_value(t, fnode) { None => { return Err(String::from("package.json: the `format` of a test suite is not text")); }, Some(f) => f, },
+            };
+            if format != "args|stdin|stdout" {
+                return Err(text::cat3("package.json: the test format `", format.as_str(), "` is not known (the format is args|stdin|stdout)"));
+            }
+            push_suite(out, Suite { units: tu, cases: cases, format: format }, units);
+            c = d.next(c);
+        }
+        Ok(())
+    }
+
+    spec fn suites_apart(s: &[Suite], units: &[String]) -> bool {
+        forall|k: usize| k < s.len() ==> #[trigger] apart(s[k].units.as_slice(), units)
+    }
+
+    #[summary("Whether the entry unit x is already in e")]
+    #[effects(pure)]
+    #[uses(free)]
+    fn taken(e: &[usize], x: usize) -> (r: bool)
+        ensures !r ==> free(e, x),
+    {
+        for k in 0..e.len()
+            invariant forall|m: usize| m < k ==> #[trigger] e[m] != x,
+        {
+            if e[k] == x {
+                return true;
+            }
+        }
+        false
+    }
+
+    spec fn the_format(s: &str) -> bool {
+        s == "args|stdin|stdout"
+    }
+
+    #[summary("Whether k is a member of the top level of package.json")]
+    #[effects(pure)]
+    fn top_key(k: &str) -> bool {
+        k == "name" || k == "version" || k == "summary" || k == "licence" || k == "units" || k == "deps" || k == "origin" || k == "bin" || k == "tests"
+    }
+
+    #[summary("A name that can name a unit: a name that is not reserved")]
+    spec fn unit_name(s: &str) -> bool {
+        ident(s) && !reserved(s)
+    }
+
+    #[summary("The invariant of Package: the name is a name and the units can name units, there is at least one unit and they are distinct, the version is MAJOR.MINOR.PATCH, the standard library units are distinct units of the standard library, every executable has a distinct name and its own entry unit among the units, and no test unit has the name of a unit of the package")]
+    spec fn valid(p: &Package) -> bool {
+        ident(p.name.as_str()) && version(p.version.as_str()) && 0 < p.units.len() && idents(p.units.as_slice()) && distinct(p.units.as_slice()) && std_units(p.std.as_slice()) && distinct(p.std.as_slice()) && p.bin_names.len() == p.bin_entries.len() && bin_names_ok(p.bin_names.as_slice()) && distinct(p.bin_names.as_slice()) && entries_ok(p.bin_entries.as_slice(), p.units.len()) && suites_apart(p.tests.as_slice(), p.units.as_slice())
+    }
+
+    #[summary("MAJOR.MINOR.PATCH: decimal digits with exactly two dots, neither at an end nor next to the other")]
+    spec fn version(s: &str) -> bool {
+        exists|i: usize, j: usize| 0 < i && i + 1 < j && j + 1 < s.len() && #[trigger] s.as_bytes()[i] == 46 && #[trigger] s.as_bytes()[j] == 46 && (forall|k: usize| k < s.len() && k != i && k != j ==> digit(#[trigger] s.as_bytes()[k]))
+    }
+}

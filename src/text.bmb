@@ -1,0 +1,186 @@
+#[summary("Text helpers of gotgan: joining texts, writing result rows as JSON objects, showing bytes in the escape form of the case files, comparing bytes, and sorting names")]
+mod text {
+    #[summary("a then b")]
+    #[effects(alloc)]
+    fn cat2(a: &str, b: &str) -> String {
+        let mut s: String = String::from(a);
+        s.push_str(b);
+        s
+    }
+
+    #[summary("a, b, c in turn")]
+    #[effects(alloc)]
+    fn cat3(a: &str, b: &str, c: &str) -> String {
+        let mut s: String = String::from(a);
+        s.push_str(b);
+        s.push_str(c);
+        s
+    }
+
+    #[summary("a, b, c, d in turn")]
+    #[effects(alloc)]
+    fn cat4(a: &str, b: &str, c: &str, d: &str) -> String {
+        let mut s: String = String::from(a);
+        s.push_str(b);
+        s.push_str(c);
+        s.push_str(d);
+        s
+    }
+
+    #[summary("a, b, c, d, e in turn")]
+    #[effects(alloc)]
+    fn cat5(a: &str, b: &str, c: &str, d: &str, e: &str) -> String {
+        let mut s: String = cat4(a, b, c, d);
+        s.push_str(e);
+        s
+    }
+
+    #[summary("Writes the row r, which has no closing brace yet, as one line of standard output")]
+    #[effects(io)]
+    fn emit(r: &str) -> () {
+        print_str(r);
+        print_str("}\n");
+    }
+
+    spec fn equal(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && (forall|k: usize| k < a.len() ==> #[trigger] a[k] == b[k])
+    }
+
+    #[summary("The lower-case hexadecimal digit of d")]
+    #[effects(pure)]
+    fn hex_digit(d: u8) -> (r: u8)
+        requires d < 16,
+        ensures 48 <= r && r <= 57 || 97 <= r && r <= 102,
+    {
+        if d < 10 {
+            48 + d
+        } else {
+            87 + d
+        }
+    }
+
+    #[summary("Writes the bytes from a to b of out, one line of a tool's output, as a line of standard output")]
+    #[effects(io)]
+    fn pass_line(out: &[u8], a: usize, b: usize) -> ()
+        requires a <= b, b <= out.len(),
+    {
+        print_bytes(&out[a..b]);
+        print_str("\n");
+    }
+
+    #[summary("Adds the member key with the value v (true or false) to the row r")]
+    #[effects(alloc)]
+    fn put_bool(r: &mut String, key: &str, v: bool) -> () {
+        r.push_str(",");
+        std::json::push_string(r, key);
+        if v {
+            r.push_str(":true");
+        } else {
+            r.push_str(":false");
+        }
+    }
+
+    #[summary("Adds the member key with the text v to the row r")]
+    #[effects(alloc)]
+    fn put_str(r: &mut String, key: &str, v: &str) -> () {
+        r.push_str(",");
+        std::json::push_string(r, key);
+        r.push_str(":");
+        std::json::push_string(r, v);
+    }
+
+    #[summary("Adds the member key with the texts v, as an array, to the row r")]
+    #[effects(alloc)]
+    fn put_strs(r: &mut String, key: &str, v: &[String]) -> () {
+        r.push_str(",");
+        std::json::push_string(r, key);
+        r.push_str(":[");
+        for k in 0..v.len()
+            invariant k <= v.len(),
+        {
+            if k > 0 {
+                r.push_str(",");
+            }
+            std::json::push_string(r, v[k].as_str());
+        }
+        r.push_str("]");
+    }
+
+    #[summary("Adds the member key with the number v to the row r")]
+    #[effects(alloc)]
+    fn put_u64(r: &mut String, key: &str, v: u64) -> () {
+        r.push_str(",");
+        std::json::push_string(r, key);
+        r.push_str(":");
+        std::num::push_u64(r, v);
+    }
+
+    #[summary("A row of the command c: the JSON object {\"command\":c without its closing brace")]
+    #[effects(alloc)]
+    fn row(c: &str) -> String {
+        let mut r: String = String::from("{\"command\":");
+        std::json::push_string(&mut r, c);
+        r
+    }
+
+    #[summary("Whether a and b are the same bytes")]
+    #[effects(pure)]
+    #[uses(equal)]
+    fn same(a: &[u8], b: &[u8]) -> (r: bool)
+        ensures r == equal(a, b),
+    {
+        if a.len() != b.len() {
+            return false;
+        }
+        for k in 0..a.len()
+            invariant forall|m: usize| m < k ==> #[trigger] a[m] == b[m],
+        {
+            if a[k] != b[k] {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[summary("The bytes b in the escape form of the case files: printable ASCII as it is except \\ written \\\\ and | written \\x7c, every other byte \\xHH")]
+    #[effects(alloc)]
+    fn shown(b: &[u8]) -> String {
+        let mut v: Vec<u8> = Vec::new();
+        for k in 0..b.len()
+            invariant k <= b.len(),
+        {
+            let c: u8 = b[k];
+            if c == 92 {
+                v.push(92);
+                v.push(92);
+            } else if 32 <= c && c <= 126 && c != 124 {
+                v.push(c);
+            } else {
+                v.push(92);
+                v.push(120);
+                v.push(hex_digit(c / 16));
+                v.push(hex_digit(c % 16));
+            }
+        }
+        match String::from_utf8(v) {
+            Ok(s) => s,
+            Err(e) => String::new(),
+        }
+    }
+
+    #[summary("The names v in byte order (the order in which bmb fmt --check compares several files)")]
+    #[effects(alloc)]
+    #[uses(std::slice::below, std::slice::sorted_order)]
+    fn sorted(v: &[String]) -> (r: Vec<String>)
+        ensures r.len() == v.len(),
+    {
+        let order: Vec<usize> = std::slice::sort_indices::<String>(v);
+        let mut out: Vec<String> = Vec::new();
+        for k in 0..order.len()
+            invariant out.len() == k, order.len() == v.len(),
+        {
+            out.push(v[order[k]].clone());
+        }
+        out
+    }
+}
