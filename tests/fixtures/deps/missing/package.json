@@ -1,0 +1,16 @@
+{
+  "name": "missing",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "missing"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "nowhere": {
+        "path": "../nowhere"
+      }
+    }
+  }
+}

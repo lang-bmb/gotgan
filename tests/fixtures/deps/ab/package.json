@@ -1,0 +1,12 @@
+{
+  "name": "ab",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "ab",
+    "ab_c"
+  ],
+  "deps": {
+    "std": []
+  }
+}

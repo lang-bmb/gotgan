@@ -1,0 +1,31 @@
+{
+  "name": "user",
+  "version": "0.1.0",
+  "summary": "An executable that calls the library twice",
+  "units": [
+    "main",
+    "user"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "twice": {
+        "path": "../twice"
+      }
+    }
+  },
+  "bin": {
+    "user": "main"
+  },
+  "tests": [
+    {
+      "units": [
+        "driver"
+      ],
+      "cases": [
+        "cases.txt"
+      ],
+      "format": "args|stdin|stdout"
+    }
+  ]
+}

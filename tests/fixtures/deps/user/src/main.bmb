@@ -1,0 +1,7 @@
+#[summary("The executable user: writes four times 5")]
+mod main {
+    #[effects(io)]
+    fn main() -> () {
+        print_u64(user::quad(5));
+    }
+}

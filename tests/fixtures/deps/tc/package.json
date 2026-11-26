@@ -1,0 +1,11 @@
+{
+  "name": "tc",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "tc"
+  ],
+  "deps": {
+    "std": []
+  }
+}

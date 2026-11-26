@@ -1,5 +1,8 @@
 #[summary("Running the compiler and other programs, and reading the JSONL rows the compiler writes")]
 mod tool {
+    #[summary("What gotgan reads of one row of bmb reads: the definition and the paths of what its proof reads as a callee or a type (not the specifications and declarations that come with a callee's contract)")]
+    struct Reads { def: String, paths: Vec<String> }
+
     #[summary("What gotgan reads of one row of the compiler: the line itself, def (verify) or path (query status) names the definition, and code is set on a diagnostic. A member that is missing reads as empty text or 0")]
     struct Row { line: String, def: String, path: String, code: String, status: String, obligations: u64, rlimit: u64, rlimit_max: u64, trust: String, termination: String, escapes: u64 }
 
@@ -66,6 +69,41 @@ mod tool {
         }
     }
 
+    #[summary("The row of bmb reads on the line t, none when it is not a JSON object with def")]
+    #[effects(alloc)]
+    #[uses(std::json::after, std::json::doc_sound, std::json::node_count, std::json::nodes_in, std::json::of_text, std::json::parsed, std::json::some_node)]
+    fn read_reads(t: &[u8]) -> Option<Reads> {
+        if t.len() > 16777216 {
+            return None;
+        }
+        let d: std::json::Doc = std::json::parse(t)?;
+        if d.kind(0) != 6 {
+            return None;
+        }
+        let def: String = text_of(&d, t, "def");
+        if def.len() == 0 {
+            return None;
+        }
+        let mut paths: Vec<String> = Vec::new();
+        let a: usize = d.member(t, 0, "reads")?;
+        if d.kind(a) != 5 {
+            return None;
+        }
+        let end: usize = d.next(a);
+        let mut c: usize = a + 1;
+        while c < end
+            invariant a < c, c <= d.nodes.len(), end <= d.nodes.len(),
+            decreases end - c,
+        {
+            match d.member(t, c, "kind") {
+                None => {},
+                Some(kn) => { if d.raw_is(t, kn, "callee") || d.raw_is(t, kn, "type") { match d.member(t, c, "path") { None => {}, Some(pn) => match d.string_value(t, pn) { None => {}, Some(x) => paths.push(x), }, } } },
+            }
+            c = d.next(c);
+        }
+        Some(Reads { def: def, paths: paths })
+    }
+
     #[summary("The row of the line t, none when it is not a JSON object in UTF-8")]
     #[effects(alloc)]
     #[uses(std::json::doc_sound, std::json::nodes_in, std::json::of_text, std::json::parsed)]
@@ -88,6 +126,28 @@ mod tool {
             Err(bad) => { return None; },
         };
         Some(Row { line: line, def: text_of(&d, t, "def"), path: text_of(&d, t, "path"), code: text_of(&d, t, "code"), status: text_of(&d, t, "status"), obligations: number_of(&d, t, "obligations"), rlimit: number_of(&d, t, "rlimit"), rlimit_max: number_of(&d, t, "rlimit_max"), trust: text_of(&d, t, "trust"), termination: text_of(&d, t, "termination"), escapes: number_of(&d, t, "escapes") })
+    }
+
+    #[summary("The rows of the output of bmb reads, one for each line that is a definition's row")]
+    #[effects(alloc)]
+    fn reads_rows(out: &[u8]) -> Vec<Reads> {
+        let mut v: Vec<Reads> = Vec::new();
+        let mut i: usize = 0;
+        while i < out.len()
+            invariant i <= out.len(),
+            decreases out.len() - i,
+        {
+            let e: usize = line_end(out, i);
+            match read_reads(&out[i..e]) {
+                None => {},
+                Some(r) => v.push(r),
+            }
+            if e >= out.len() {
+                return v;
+            }
+            i = e + 1;
+        }
+        v
     }
 
     #[summary("The rows of the JSONL output out, one for each line that is a JSON object")]

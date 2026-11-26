@@ -1,0 +1,11 @@
+#[summary("The middle of the chain: calls tc")]
+mod tb {
+    #[summary("x plus two")]
+    #[effects(pure)]
+    fn f(x: u64) -> (r: u64)
+        requires x < 900,
+        ensures r == x + 2,
+    {
+        tc::g(tc::g(x))
+    }
+}

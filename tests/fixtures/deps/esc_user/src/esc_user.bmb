@@ -1,0 +1,11 @@
+#[summary("Calls a library that carries an escape hatch")]
+mod esc_user {
+    #[summary("x itself")]
+    #[effects(panic)]
+    fn keep(x: u64) -> (r: u64)
+        requires x > 0,
+        ensures r > 0,
+    {
+        esc_lib::same(x)
+    }
+}

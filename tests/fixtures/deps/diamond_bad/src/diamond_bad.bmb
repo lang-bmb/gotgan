@@ -1,0 +1,11 @@
+#[summary("Reaches twice at two directories")]
+mod diamond_bad {
+    #[summary("Four times x, through dl and dr")]
+    #[effects(pure)]
+    fn both(x: u64) -> (r: u64)
+        requires x <= 2305843009213693951,
+        ensures r == 4 * x,
+    {
+        dl::left(x) + dr_copy::right(x)
+    }
+}

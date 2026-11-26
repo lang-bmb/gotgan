@@ -1,0 +1,11 @@
+#[summary("Calls tc, which it reaches through tb but does not declare")]
+mod ta_skip {
+    #[summary("x plus three, through tb and tc")]
+    #[effects(pure)]
+    fn h(x: u64) -> (r: u64)
+        requires x < 800,
+        ensures r == x + 3,
+    {
+        tc::g(tb::f(x))
+    }
+}

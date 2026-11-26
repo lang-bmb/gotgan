@@ -1,0 +1,11 @@
+#[summary("The end of the chain ta, tb, tc")]
+mod tc {
+    #[summary("x plus one")]
+    #[effects(pure)]
+    fn g(x: u64) -> (r: u64)
+        requires x < 1000,
+        ensures r == x + 1,
+    {
+        x + 1
+    }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "tb",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "tb"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "tc": {
+        "path": "../tc"
+      }
+    }
+  }
+}

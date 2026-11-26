@@ -1,0 +1,17 @@
+#[summary("A library with an assume its proof does not need")]
+mod esc_lib {
+    spec fn positive(x: u64) -> bool {
+        x > 0
+    }
+
+    #[summary("x itself")]
+    #[effects(panic)]
+    fn same(x: u64) -> (r: u64)
+        requires x > 0,
+        ensures r > 0,
+    {
+        #[rationale(kind = boundary, "not needed: the precondition says it")]
+        assume(positive(x));
+        x
+    }
+}

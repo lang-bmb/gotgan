@@ -1,0 +1,16 @@
+{
+  "name": "uses_exe",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "uses_exe"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "user": {
+        "path": "../user"
+      }
+    }
+  }
+}

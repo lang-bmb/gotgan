@@ -1,0 +1,16 @@
+{
+  "name": "dr_copy",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "dr_copy"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "twice": {
+        "path": "../twice_copy"
+      }
+    }
+  }
+}

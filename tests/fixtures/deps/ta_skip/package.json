@@ -1,0 +1,16 @@
+{
+  "name": "ta_skip",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "ta_skip"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "tb": {
+        "path": "../tb"
+      }
+    }
+  }
+}

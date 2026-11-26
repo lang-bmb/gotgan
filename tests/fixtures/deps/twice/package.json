@@ -1,0 +1,11 @@
+{
+  "name": "twice",
+  "version": "0.1.0",
+  "summary": "A library: doubling",
+  "units": [
+    "twice"
+  ],
+  "deps": {
+    "std": []
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "dl",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "dl"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "twice": {
+        "path": "../twice"
+      }
+    }
+  }
+}

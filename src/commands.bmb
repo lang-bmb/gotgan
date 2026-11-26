@@ -1,5 +1,14 @@
-#[summary("The commands of gotgan on a package: check, verify, test and build. Each one runs the compiler on the package's files, writes its results as JSONL rows on standard output and the compiler's messages on standard error, and gives 0 when the package passes, 1 when it fails and 2 when the declaration or a case file cannot be read")]
+#[summary("The commands of gotgan on a package: check, verify, test and build. Each one runs the compiler on the files of the package and of the closure of its dependencies, writes its results as JSONL rows on standard output and the compiler's messages on standard error, and gives 0 when the package passes, 1 when it fails and 2 when a case file cannot be read")]
 mod commands {
+    #[summary("Adds s to v when v does not hold it")]
+    #[effects(alloc)]
+    fn add_once(v: &mut Vec<String>, s: &str) -> () {
+        match decl::position(v.as_slice(), s) {
+            None => v.push(String::from(s)),
+            Some(k) => {},
+        }
+    }
+
     #[summary("The arguments words followed by files")]
     #[effects(alloc)]
     fn args_with(words: &[String], files: &[String]) -> Vec<String> {
@@ -17,9 +26,9 @@ mod commands {
         a
     }
 
-    #[summary("gotgan build: bmb build of each executable of bin into target/gotgan/<name>, from the package's units but the entry units of the other executables. A result row for each; gives whether all were built")]
+    #[summary("gotgan build: bmb build of the executable of bin (at most one) into target/gotgan/<name>, from the closure's files. A result row for it; gives whether it was built")]
     #[effects(alloc, io, nondet)]
-    fn build(dir: &str, p: &decl::Package) -> bool {
+    fn build(dir: &str, p: &decl::Package, nodes: &[resolve::Node]) -> bool {
         let mut all: bool = true;
         if p.bin_names.len() == 0 {
             eprint_str("gotgan: build: the package declares no executable (bin)\n");
@@ -27,11 +36,10 @@ mod commands {
         for b in 0..p.bin_names.len()
             invariant b <= p.bin_names.len(),
         {
-            let us: Vec<String> = units_of_bin(p, b);
-            let fs: Vec<String> = files(dir, p, us.as_slice());
+            let fs: Vec<String> = closure_files(nodes);
             let tdir: String = target(dir);
             let out: String = text::cat3(tdir.as_str(), "/", p.bin_names[b].as_str());
-            let built: bool = build_files(fs.as_slice(), out.as_str());
+            let built: bool = build_files(fs.as_slice(), out.as_str(), nodes);
             if !built {
                 all = false;
             }
@@ -47,7 +55,7 @@ mod commands {
 
     #[summary("bmb build on files into the executable out: whether it was built; the compiler's diagnostics and unproved rows go to standard output, its messages to standard error")]
     #[effects(alloc, io, nondet)]
-    fn build_files(files: &[String], out: &str) -> bool {
+    fn build_files(files: &[String], out: &str, nodes: &[resolve::Node]) -> bool {
         let w: Vec<String> = one("build");
         let mut a: Vec<String> = args_with(w.as_slice(), files);
         a = args_with(a.as_slice(), two("-o", out).as_slice());
@@ -61,42 +69,43 @@ mod commands {
                 print_str("\n");
             }
         }
+        hint(rs.as_slice(), nodes);
         tool::eprint_bytes(o.stderr.as_slice());
         o.status == 0
     }
 
-    #[summary("gotgan check: bmb fmt --check and bmb check on the package's units, and on the units with the test units of each suite. The result row gives the number of units and test units and whether each step passed")]
+    #[summary("gotgan check: bmb fmt --check and bmb check on the files of the package and of its dependencies' closure, and on the files of each test suite's program (suite_files): the compiler reads them as one program, so a file is checked with the program it belongs to. The result row gives the number of units, of the dependencies' units and of test units, the packages reached, and whether each step passed")]
     #[effects(alloc, io, nondet)]
-    fn check(dir: &str, p: &decl::Package) -> bool {
-        let fs: Vec<String> = files(dir, p, p.units.as_slice());
-        let fmt_ok: bool = fmt_check(fs.as_slice());
-        let check_ok: bool = check_files(fs.as_slice());
-        let mut tests_fmt: bool = true;
-        let mut tests_check: bool = true;
+    #[uses(decl::suite_sound)]
+    fn check(dir: &str, p: &decl::Package, nodes: &[resolve::Node]) -> bool {
+        let fs: Vec<String> = closure_files(nodes);
+        let mut fmt_ok: bool = fmt_check(fs.as_slice(), nodes);
+        let mut check_ok: bool = check_files(fs.as_slice(), nodes);
         let mut test_units: u64 = 0;
         for s in 0..p.tests.len()
             invariant s <= p.tests.len(),
         {
             test_units = test_units.saturating_add(p.tests[s].units.len() as u64);
-            let all: Vec<String> = with_tests(p, s);
-            let tf: Vec<String> = files(dir, p, all.as_slice());
-            if !fmt_check(tf.as_slice()) {
-                tests_fmt = false;
+            let tf: Vec<String> = suite_files(dir, p, s, nodes);
+            if !fmt_check(tf.as_slice(), nodes) {
+                fmt_ok = false;
             }
-            if !check_files(tf.as_slice()) {
-                tests_check = false;
+            if !check_files(tf.as_slice(), nodes) {
+                check_ok = false;
             }
         }
-        let ok: bool = fmt_ok && check_ok && tests_fmt && tests_check;
-        if !fmt_ok || !tests_fmt {
+        let ok: bool = fmt_ok && check_ok;
+        if !fmt_ok {
             eprint_str("gotgan: check: files not in normal form (bmb fmt writes the normal form)\n");
         }
         let mut r: String = text::row("check");
         text::put_str(&mut r, "package", p.name.as_str());
         text::put_u64(&mut r, "units", p.units.len() as u64);
+        text::put_u64(&mut r, "dep_units", dep_units(nodes));
         text::put_u64(&mut r, "test_units", test_units);
-        text::put_bool(&mut r, "fmt", fmt_ok && tests_fmt);
-        text::put_bool(&mut r, "check", check_ok && tests_check);
+        text::put_strs(&mut r, "packages", reached(nodes).as_slice());
+        text::put_bool(&mut r, "fmt", fmt_ok);
+        text::put_bool(&mut r, "check", check_ok);
         text::put_bool(&mut r, "ok", ok);
         text::emit(r.as_str());
         ok
@@ -104,46 +113,128 @@ mod commands {
 
     #[summary("bmb check on files: whether they pass the checker; the compiler's rows and messages are passed on")]
     #[effects(alloc, io, nondet)]
-    fn check_files(files: &[String]) -> bool {
+    fn check_files(files: &[String], nodes: &[resolve::Node]) -> bool {
         let w: Vec<String> = one("check");
         let o: std::process::Output = tool::bmb(args_with(w.as_slice(), files).as_slice());
-        pass_diagnostics(&o);
+        pass_diagnostics(&o, nodes);
         o.status == 0
     }
 
-    #[summary("The file of the unit name of p in the package directory dir: src/<name>.bmb for a unit of the package, tests/<name>.bmb for a test unit")]
+    #[summary("The source files of the closure nodes: dir/src/<unit>.bmb for every unit of every package, the package's own first")]
     #[effects(alloc)]
-    fn file_of(dir: &str, p: &decl::Package, name: &str) -> String {
-        let mut f: String = String::from(dir);
-        match decl::position(p.units.as_slice(), name) {
-            None => f.push_str("/tests/"),
-            Some(k) => f.push_str("/src/"),
-        }
-        f.push_str(name);
-        f.push_str(".bmb");
-        f
-    }
-
-    #[summary("The files of the units names, in byte order of the names (bmb fmt --check compares several files in the order of their unit names)")]
-    #[effects(alloc)]
-    fn files(dir: &str, p: &decl::Package, names: &[String]) -> Vec<String> {
-        let order: Vec<String> = text::sorted(names);
+    fn closure_files(nodes: &[resolve::Node]) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for k in 0..order.len()
-            invariant k <= order.len(),
+        for v in 0..nodes.len()
+            invariant v <= nodes.len(),
         {
-            out.push(file_of(dir, p, order[k].as_str()));
+            for u in 0..nodes[v].units.len()
+                invariant v < nodes.len(),
+            {
+                out.push(text::cat4(nodes[v].dir.as_str(), "/src/", nodes[v].units[u].as_str(), ".bmb"));
+            }
         }
         out
     }
 
+    #[summary("Whether each package of the closure nodes declares exactly what its own units use, from the rows of bmb reads on the closure's files: its deps.packages are the packages whose functions or types its definitions read as callees or types (a package used only through another need not be declared, and a declared one that is not used is an error), and its deps.std are the standard library units its definitions reach, following calls inside the standard library but not through other packages. Each mismatch is said on standard error")]
+    #[effects(alloc, io, nondet)]
+    fn declared_exactly(nodes: &[resolve::Node], files: &[String]) -> bool {
+        let w: Vec<String> = one("reads");
+        let o: std::process::Output = tool::bmb(args_with(w.as_slice(), files).as_slice());
+        if o.status != 0 {
+            eprint_str("gotgan: verify: bmb reads failed\n");
+            tool::eprint_bytes(o.stderr.as_slice());
+            return false;
+        }
+        let rs: Vec<tool::Reads> = tool::reads_rows(o.stdout.as_slice());
+        let mut calls: Vec<Vec<String>> = Vec::new();
+        let mut stds: Vec<Vec<String>> = Vec::new();
+        for v in 0..nodes.len()
+            invariant calls.len() == v, stds.len() == v,
+        {
+            calls.push(Vec::new());
+            stds.push(Vec::new());
+        }
+        let mut sfrom: Vec<String> = Vec::new();
+        let mut sto: Vec<String> = Vec::new();
+        for k in 0..rs.len()
+            invariant calls.len() == nodes.len(), stds.len() == nodes.len(),
+        {
+            let from_std: Option<String> = std_unit_of(rs[k].def.as_str());
+            let from: Option<usize> = owner(nodes, unit_of(rs[k].def.as_str()).as_str());
+            for m in 0..rs[k].paths.len()
+                invariant k < rs.len(), calls.len() == nodes.len(), stds.len() == nodes.len(),
+            {
+                let q: String = rs[k].paths[m].clone();
+                match std_unit_of(q.as_str()) {
+                    None => match from { None => {}, Some(v) => match owner(nodes, unit_of(q.as_str()).as_str()) { None => {}, Some(w2) => { if w2 != v { add_once(&mut calls[v], nodes[w2].name.as_str()); } }, }, },
+                    Some(y) => { if decl::is_std(y.as_str()) { match &from_std { None => match from { None => {}, Some(v) => add_once(&mut stds[v], y.as_str()), }, Some(x) => { if *x != y { sfrom.push(x.clone()); sto.push(y.clone()); } }, } } },
+                }
+            }
+        }
+        let mut ok: bool = true;
+        for v in 0..nodes.len()
+            invariant calls.len() == nodes.len(), stds.len() == nodes.len(),
+        {
+            for k in 0..calls[v].len()
+                invariant v < nodes.len(), calls.len() == nodes.len(),
+            {
+                match decl::position(nodes[v].deps.as_slice(), calls[v][k].as_str()) {
+                    None => { ok = false; eprint_str(text::cat5("gotgan: verify: the units of `", nodes[v].name.as_str(), "` use the package `", calls[v][k].as_str(), "`, which its deps.packages does not declare (each package declares the packages its own units use)\n").as_str()); },
+                    Some(j) => {},
+                }
+            }
+            for k in 0..nodes[v].deps.len()
+                invariant v < nodes.len(), calls.len() == nodes.len(),
+            {
+                match decl::position(calls[v].as_slice(), nodes[v].deps[k].as_str()) {
+                    None => { ok = false; eprint_str(text::cat5("gotgan: verify: `", nodes[v].name.as_str(), "` declares the package `", nodes[v].deps[k].as_str(), "` in deps.packages, but its units use nothing of it\n").as_str()); },
+                    Some(j) => {},
+                }
+            }
+            let reach: Vec<String> = std_closure(stds[v].as_slice(), sfrom.as_slice(), sto.as_slice());
+            if !same_set(reach.as_slice(), nodes[v].std.as_slice()) {
+                ok = false;
+                eprint_str(text::cat5("gotgan: verify: deps.std of `", nodes[v].name.as_str(), "` must list exactly the standard library units its units reach; they reach [", joined(reach.as_slice()).as_str(), text::cat3("] and deps.std lists [", joined(nodes[v].std.as_slice()).as_str(), "]\n").as_str()).as_str());
+            }
+        }
+        ok
+    }
+
+    #[summary("The number of units of the closure nodes after the first")]
+    #[effects(pure)]
+    fn dep_units(nodes: &[resolve::Node]) -> u64 {
+        let mut n: u64 = 0;
+        for v in 1..nodes.len()
+            invariant 1 <= v,
+        {
+            n = n.saturating_add(nodes[v].units.len() as u64);
+        }
+        n
+    }
+
     #[summary("bmb fmt --check on files: whether they are in normal form; the compiler's rows and messages are passed on")]
     #[effects(alloc, io, nondet)]
-    fn fmt_check(files: &[String]) -> bool {
+    fn fmt_check(files: &[String], nodes: &[resolve::Node]) -> bool {
         let w: Vec<String> = two("fmt", "--check");
         let o: std::process::Output = tool::bmb(args_with(w.as_slice(), files).as_slice());
-        pass_diagnostics(&o);
+        pass_diagnostics(&o, nodes);
         o.status == 0
+    }
+
+    #[summary("Says on standard error, once, when a diagnostic of rs names an unknown unit: one that is neither a unit of the closure nodes nor of the standard library, so that a call to another package lacks the package in deps.packages")]
+    #[effects(alloc, io)]
+    fn hint(rs: &[tool::Row], nodes: &[resolve::Node]) -> () {
+        for k in 0..rs.len()
+            invariant k <= rs.len(),
+        {
+            if rs[k].code.len() > 0 {
+                match std::str::find(rs[k].line.as_str(), "unknown") {
+                    None => {},
+                    Some(at) => { match quoted_unit(rs[k].line.as_str()) { None => {}, Some(u) => { if u != "std" { match owner(nodes, u.as_str()) { None => { eprint_str("gotgan: `"); eprint_str(u.as_str()); eprint_str("` is not a unit of this package or of a package in its deps.packages (a call to another package needs that package in deps.packages)\n"); return; }, Some(v) => {}, } } }, } },
+                }
+            }
+        }
     }
 
     #[summary("The arguments of a case as one text, separated by spaces")]
@@ -169,9 +260,25 @@ mod commands {
         v
     }
 
-    #[summary("Writes the diagnostic rows of the compiler's output o (rows with a code) to standard output and its standard error to standard error")]
+    #[summary("The package of the closure nodes that has the unit u, none when no package has it")]
+    #[effects(pure)]
+    fn owner(nodes: &[resolve::Node], u: &str) -> (r: Option<usize>)
+        ensures match r { None => true, Some(v) => v < nodes.len(), },
+    {
+        for v in 0..nodes.len()
+            invariant v <= nodes.len(),
+        {
+            match decl::position(nodes[v].units.as_slice(), u) {
+                None => {},
+                Some(k) => { return Some(v); },
+            }
+        }
+        None
+    }
+
+    #[summary("Writes the diagnostic rows of the compiler's output o (rows with a code) to standard output and its standard error to standard error, with the hint of hint")]
     #[effects(alloc, io)]
-    fn pass_diagnostics(o: &std::process::Output) -> () {
+    fn pass_diagnostics(o: &std::process::Output, nodes: &[resolve::Node]) -> () {
         let rs: Vec<tool::Row> = tool::rows(o.stdout.as_slice());
         for k in 0..rs.len()
             invariant k <= rs.len(),
@@ -181,7 +288,49 @@ mod commands {
                 print_str("\n");
             }
         }
+        hint(rs.as_slice(), nodes);
         tool::eprint_bytes(o.stderr.as_slice());
+    }
+
+    #[summary("The unit of the first path written between backquotes in the message of a diagnostic line, A in `A::..`, none when there is none")]
+    #[effects(alloc)]
+    fn quoted_unit(line: &str) -> Option<String> {
+        let n: usize = line.len();
+        let mut k: usize = 0;
+        while k < n && line.as_bytes()[k] != 96
+            invariant k <= n,
+            decreases n - k,
+        {
+            k = k + 1;
+        }
+        let mut v: Vec<u8> = Vec::new();
+        let mut j: usize = k + 1;
+        while j < n && line.as_bytes()[j] != 58 && line.as_bytes()[j] != 96
+            invariant j <= n + 1,
+            decreases n - j,
+        {
+            v.push(line.as_bytes()[j]);
+            j = j + 1;
+        }
+        if j + 1 >= n || line.as_bytes()[j] != 58 || line.as_bytes()[j + 1] != 58 || v.len() == 0 {
+            return None;
+        }
+        match String::from_utf8(v) {
+            Ok(s) => Some(s),
+            Err(bad) => None,
+        }
+    }
+
+    #[summary("The names of the closure nodes after the first, the packages the package reaches")]
+    #[effects(alloc)]
+    fn reached(nodes: &[resolve::Node]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for v in 1..nodes.len()
+            invariant 1 <= v,
+        {
+            out.push(nodes[v].name.clone());
+        }
+        out
     }
 
     #[summary("Runs the cases of the case file named file with the driver exe: a case passes when the driver exits with 0 and its standard output is the expected bytes. Writes a row for each case that fails and adds to passed and failed; gives false when the file cannot be read or is not in the format, which is then said on standard error")]
@@ -231,6 +380,33 @@ mod commands {
         true
     }
 
+    #[summary("The standard library units reached from the units direct, following the calls between standard library units (the edge k goes from sfrom[k] to sto[k]), into out")]
+    #[effects(alloc)]
+    fn std_closure(direct: &[String], sfrom: &[String], sto: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for k in 0..direct.len()
+            invariant k <= direct.len(),
+        {
+            add_once(&mut out, direct[k].as_str());
+        }
+        let mut i: usize = 0;
+        while i < out.len() && i < 64
+            invariant i <= 64,
+            decreases 64 - i,
+        {
+            let x: String = out[i].clone();
+            for k in 0..sfrom.len()
+                invariant k <= sfrom.len(),
+            {
+                if sfrom[k] == x && k < sto.len() {
+                    add_once(&mut out, sto[k].as_str());
+                }
+            }
+            i = i + 1;
+        }
+        out
+    }
+
     #[summary("The standard library unit X of a definition std::X::.., none for a definition outside the standard library")]
     #[effects(alloc)]
     fn std_unit_of(def: &str) -> Option<String> {
@@ -253,6 +429,41 @@ mod commands {
         }
     }
 
+    #[summary("The files of a test program of suite s of p, whose directory is dir: the closure's files but the entry unit of p's executable (the suite has its own fn main), then tests/<unit>.bmb for each test unit")]
+    #[effects(alloc)]
+    fn suite_files(dir: &str, p: &decl::Package, s: usize, nodes: &[resolve::Node]) -> Vec<String>
+        requires s < p.tests.len(),
+    {
+        let mut out: Vec<String> = Vec::new();
+        for v in 0..nodes.len()
+            invariant v <= nodes.len(),
+        {
+            for u in 0..nodes[v].units.len()
+                invariant v < nodes.len(),
+            {
+                let mut entry: bool = false;
+                if v == 0 {
+                    for k in 0..p.bin_entries.len()
+                        invariant k <= p.bin_entries.len(),
+                    {
+                        if p.bin_entries[k] == u {
+                            entry = true;
+                        }
+                    }
+                }
+                if !entry {
+                    out.push(text::cat4(nodes[v].dir.as_str(), "/src/", nodes[v].units[u].as_str(), ".bmb"));
+                }
+            }
+        }
+        for k in 0..p.tests[s].units.len()
+            invariant k <= p.tests[s].units.len(),
+        {
+            out.push(text::cat4(dir, "/tests/", p.tests[s].units[k].as_str(), ".bmb"));
+        }
+        out
+    }
+
     #[summary("The directory dir/target/gotgan, made when it is missing, where gotgan writes what it builds; exits with 2 when it cannot be made")]
     #[effects(alloc, io)]
     fn target(dir: &str) -> String {
@@ -264,10 +475,10 @@ mod commands {
         t
     }
 
-    #[summary("gotgan test: for each test suite, bmb build of the package's units with its test units into target/gotgan/<first test unit> (the build proves them first), then every case of its case files run through that driver. A result row for each suite (cases passed and failed) and for each case that fails. Gives 0 when every case passes, 1 when a driver does not build or a case fails, 2 when a case file cannot be read or is not in the format")]
+    #[summary("gotgan test: for each test suite, bmb build of the closure's files and the suite's test units into target/gotgan/<first test unit> (the build proves them first), then every case of its case files run through that program. A result row for each suite (cases passed and failed) and for each case that fails. Gives 0 when every case passes, 1 when a suite's program does not build or a case fails, 2 when a case file cannot be read or is not in the format")]
     #[effects(alloc, io, nondet)]
     #[uses(decl::suite_sound)]
-    fn test(dir: &str, p: &decl::Package) -> u8 {
+    fn test(dir: &str, p: &decl::Package, nodes: &[resolve::Node]) -> u8 {
         let mut code: u8 = 0;
         if p.tests.len() == 0 {
             eprint_str("gotgan: test: the package declares no test suite\n");
@@ -275,12 +486,11 @@ mod commands {
         for s in 0..p.tests.len()
             invariant s <= p.tests.len(), code <= 2,
         {
-            let all: Vec<String> = with_tests(p, s);
-            let fs: Vec<String> = files(dir, p, all.as_slice());
+            let fs: Vec<String> = suite_files(dir, p, s, nodes);
             let tdir: String = target(dir);
             let first: String = p.tests[s].units[0].clone();
             let exe: String = text::cat3(tdir.as_str(), "/", first.as_str());
-            let built: bool = build_files(fs.as_slice(), exe.as_str());
+            let built: bool = build_files(fs.as_slice(), exe.as_str(), nodes);
             let mut passed: u64 = 0;
             let mut failed: u64 = 0;
             let mut readable: bool = true;
@@ -293,9 +503,11 @@ mod commands {
                     }
                 }
             } else {
-                eprint_str("gotgan: test: the driver ");
+                eprint_str("gotgan: test: suite `");
                 eprint_str(first.as_str());
-                eprint_str(" does not build\n");
+                eprint_str("`: the test program (the closure's units with tests/");
+                eprint_str(first.as_str());
+                eprint_str(".bmb and the suite's other test units) does not build\n");
             }
             let ok: bool = built && readable && failed == 0;
             let mut r: String = text::row("test");
@@ -324,39 +536,35 @@ mod commands {
         v
     }
 
-    #[summary("The units of p that build executable b: all of them but the entry units of the other executables")]
+    #[summary("The unit of the path q of a definition or type: the text before its first ::")]
     #[effects(alloc)]
-    fn units_of_bin(p: &decl::Package, b: usize) -> Vec<String>
-        requires b < p.bin_names.len(),
-    {
-        let mut out: Vec<String> = Vec::new();
-        for u in 0..p.units.len()
-            invariant u <= p.units.len(),
+    fn unit_of(q: &str) -> String {
+        let mut v: Vec<u8> = Vec::new();
+        let mut k: usize = 0;
+        while k < q.len() && q.as_bytes()[k] != 58
+            invariant k <= q.len(),
+            decreases q.len() - k,
         {
-            let mut other: bool = false;
-            for k in 0..p.bin_entries.len()
-                invariant k <= p.bin_entries.len(),
-            {
-                if k != b && p.bin_entries[k] == u {
-                    other = true;
-                }
-            }
-            if !other {
-                out.push(p.units[u].clone());
-            }
+            v.push(q.as_bytes()[k]);
+            k = k + 1;
         }
-        out
+        match String::from_utf8(v) {
+            Ok(s) => s,
+            Err(bad) => String::new(),
+        }
     }
 
-    #[summary("gotgan verify: bmb verify on the package's units, then bmb query status on them for the escape hatches of each definition. Fails when a definition is not proved, when any definition (the standard library units included) has an escape hatch (assume, #[external_body]), a trust level assumed or external, or termination: unproved, or when the standard library units the program reaches are not exactly deps.std. The result row gives the definitions proved (the package's and the standard library's), obligations, rlimit and the counts that must be 0")]
+    #[summary("gotgan verify: bmb verify on the files of the package and its dependencies' closure, bmb query status on them for the escape hatches of each definition, and bmb reads for what each package uses. Fails when a definition is not proved, when any definition (the dependencies' and the standard library's included) has an escape hatch (assume, #[external_body]), a trust level assumed or external, or termination: unproved, or when a package of the closure does not declare exactly what its units use (declared_exactly). The result row gives the definitions proved (the package's, its dependencies' and the standard library's), the package's obligations and rlimit, the counts that must be 0, the standard library units the package's units reach and the packages it reaches")]
     #[effects(alloc, io, nondet)]
-    fn verify(dir: &str, p: &decl::Package) -> bool {
-        let fs: Vec<String> = files(dir, p, p.units.as_slice());
+    fn verify(p: &decl::Package, nodes: &[resolve::Node]) -> bool {
+        let fs: Vec<String> = closure_files(nodes);
         let w: Vec<String> = one("verify");
         let o: std::process::Output = tool::bmb(args_with(w.as_slice(), fs.as_slice()).as_slice());
         tool::eprint_bytes(o.stderr.as_slice());
         let rs: Vec<tool::Row> = tool::rows(o.stdout.as_slice());
+        hint(rs.as_slice(), nodes);
         let mut defs: u64 = 0;
+        let mut dep_defs: u64 = 0;
         let mut std_defs: u64 = 0;
         let mut obligations: u64 = 0;
         let mut rlimit: u64 = 0;
@@ -364,7 +572,6 @@ mod commands {
         let mut unproved: u64 = 0;
         let mut trusted: u64 = 0;
         let mut endless: u64 = 0;
-        let mut reached: Vec<String> = Vec::new();
         for k in 0..rs.len()
             invariant k <= rs.len(),
         {
@@ -373,8 +580,8 @@ mod commands {
                 print_str("\n");
             } else if rs[k].def.len() > 0 {
                 match std_unit_of(rs[k].def.as_str()) {
-                    None => { defs = defs.saturating_add(1); obligations = obligations.saturating_add(rs[k].obligations); rlimit = rlimit.saturating_add(rs[k].rlimit); if rs[k].rlimit_max > rlimit_max { rlimit_max = rs[k].rlimit_max; } },
-                    Some(u) => { std_defs = std_defs.saturating_add(1); match decl::position(reached.as_slice(), u.as_str()) { None => reached.push(u), Some(j) => {}, } },
+                    None => match owner(nodes, unit_of(rs[k].def.as_str()).as_str()) { None => { defs = defs.saturating_add(1); }, Some(v) => { if v == 0 { defs = defs.saturating_add(1); obligations = obligations.saturating_add(rs[k].obligations); rlimit = rlimit.saturating_add(rs[k].rlimit); if rs[k].rlimit_max > rlimit_max { rlimit_max = rs[k].rlimit_max; } } else { dep_defs = dep_defs.saturating_add(1); } }, },
+                    Some(u) => { std_defs = std_defs.saturating_add(1); },
                 }
                 if rs[k].status != "verified" {
                     unproved = unproved.saturating_add(1);
@@ -423,22 +630,17 @@ mod commands {
         if endless_status > endless {
             endless = endless_status;
         }
-        let declared: bool = same_set(reached.as_slice(), p.std.as_slice());
-        if !declared {
-            eprint_str("gotgan: verify: deps.std must list exactly the standard library units the program reaches; it reaches [");
-            eprint_str(joined(text::sorted(reached.as_slice()).as_slice()).as_str());
-            eprint_str("] and deps.std lists [");
-            eprint_str(joined(p.std.as_slice()).as_str());
-            eprint_str("]\n");
-        }
-        if so.status != 0 || status_rows == 0 {
+        if o.status == 0 && (so.status != 0 || status_rows == 0) {
             eprint_str("gotgan: verify: bmb query status gave no rows\n");
             tool::eprint_bytes(so.stderr.as_slice());
         }
-        let ok: bool = o.status == 0 && defs > 0 && unproved == 0 && trusted == 0 && endless == 0 && escapes == 0 && declared && so.status == 0 && status_rows > 0;
+        let proved: bool = o.status == 0 && defs > 0 && unproved == 0;
+        let declared: bool = proved && declared_exactly(nodes, fs.as_slice());
+        let ok: bool = proved && trusted == 0 && endless == 0 && escapes == 0 && declared && so.status == 0 && status_rows > 0;
         let mut r: String = text::row("verify");
         text::put_str(&mut r, "package", p.name.as_str());
         text::put_u64(&mut r, "defs", defs);
+        text::put_u64(&mut r, "dep_defs", dep_defs);
         text::put_u64(&mut r, "std_defs", std_defs);
         text::put_u64(&mut r, "obligations", obligations);
         text::put_u64(&mut r, "rlimit", rlimit);
@@ -447,23 +649,11 @@ mod commands {
         text::put_u64(&mut r, "escapes", escapes);
         text::put_u64(&mut r, "trusted", trusted);
         text::put_u64(&mut r, "termination_unproved", endless);
-        text::put_strs(&mut r, "std", text::sorted(reached.as_slice()).as_slice());
+        text::put_bool(&mut r, "declared", declared);
+        text::put_strs(&mut r, "std", p.std.as_slice());
+        text::put_strs(&mut r, "packages", reached(nodes).as_slice());
         text::put_bool(&mut r, "ok", ok);
         text::emit(r.as_str());
         ok
-    }
-
-    #[summary("The units of p and the test units of suite s")]
-    #[effects(alloc)]
-    fn with_tests(p: &decl::Package, s: usize) -> Vec<String>
-        requires s < p.tests.len(),
-    {
-        let mut all: Vec<String> = p.units.clone();
-        for k in 0..p.tests[s].units.len()
-            invariant k <= p.tests[s].units.len(),
-        {
-            all.push(p.tests[s].units[k].clone());
-        }
-        all
     }
 }

@@ -1,8 +1,8 @@
 #[summary("The package declaration (package.json): what a valid declaration is, as the invariant of the type Package, and reading one from its JSON text. A declaration names the package, its version and summary, its units (src/<unit>.bmb each), the standard library units it uses, its executables and its test suites")]
 mod decl {
-    #[summary("A valid package declaration (the invariant valid). The executables are bin_names, each with the position in units of its entry unit, the unit that holds its fn main, in bin_entries")]
+    #[summary("A valid package declaration (the invariant valid). The executables are bin_names, each with the position in units of its entry unit, the unit that holds its fn main, in bin_entries. The packages it depends on are dep_names, each with the path of its directory, relative to this package's directory, in dep_paths")]
     #[invariant(valid)]
-    struct Package { name: String, version: String, summary: String, units: Vec<String>, std: Vec<String>, bin_names: Vec<String>, bin_entries: Vec<usize>, tests: Vec<Suite> }
+    struct Package { name: String, version: String, summary: String, units: Vec<String>, std: Vec<String>, dep_names: Vec<String>, dep_paths: Vec<String>, bin_names: Vec<String>, bin_entries: Vec<usize>, tests: Vec<Suite> }
 
     #[summary("A test suite: the test units (tests/<unit>.bmb each) built together with the package's units into one driver, the case files it runs (tests/<file> each) and the format of those files")]
     #[invariant(suite_sound)]
@@ -64,32 +64,41 @@ mod decl {
         None
     }
 
-    spec fn bin_names_ok(v: &[String]) -> bool {
-        forall|k: usize| k < v.len() ==> #[trigger] ident(v[k].as_str())
+    #[summary("The executables: at most one (a package is one program, with one fn main), with a name and its entry unit among n units")]
+    spec fn bins_part(names: &[String], entries: &[usize], n: usize) -> bool {
+        names.len() <= 1 && names.len() == entries.len() && names_ok(names) && distinct(names) && entries_ok(entries, n)
     }
 
-    #[summary("The standard library units that the deps object node dn names, into out (cleared first): deps has only the member std, an array of distinct units of the standard library")]
+    #[summary("The dependencies that the deps object node dn declares: the standard library units of its member std into out, and the packages of its member packages into names and paths (all cleared first). deps has no other member")]
     #[effects(alloc)]
-    #[uses(first_bad_std, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
-    fn deps(d: &std::json::Doc, t: &[u8], dn: usize, out: &mut Vec<String>) -> (r: Result<(), String>)
-        requires std::json::node_pos(d, dn), same_text(d, t),
-        ensures std_units(out.as_slice()), distinct(out.as_slice()),
+    #[uses(deps_read, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn deps(d: &std::json::Doc, t: &[u8], node: Option<usize>, out: &mut Vec<String>, names: &mut Vec<String>, paths: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::some_node(d, node), same_text(d, t),
+        ensures deps_read(&r, out.as_slice(), names.as_slice(), paths.as_slice()),
     {
-        *out = Vec::new();
+        let dn: usize = match node {
+            None => { std_list(d, t, None, out)?; packages(d, t, None, names, paths)?; return Ok(()); },
+            Some(x) => x,
+        };
         let mut ks: Vec<String> = Vec::new();
         keys(d, t, dn, "package.json: `deps`", &mut ks)?;
         for k in 0..ks.len()
-            invariant k <= ks.len(), std_units(out.as_slice()), distinct(out.as_slice()),
+            invariant k <= ks.len(),
         {
-            if ks[k] != "std" {
-                return Err(text::cat3("package.json: `deps` has the member `", ks[k].as_str(), "`: only `std` (units of the standard library) is understood; dependencies on other packages are not part of the declaration yet"));
+            if ks[k] != "std" && ks[k] != "packages" {
+                return Err(text::cat3("package.json: `deps` has the member `", ks[k].as_str(), "` (the members are std, the units of the standard library, and packages, the packages depended on by path)"));
             }
         }
-        match d.member(t, dn, "std") {
-            None => {},
-            Some(sn) => { let mut names: Vec<String> = Vec::new(); strings(d, t, sn, "package.json: `deps.std`", &mut names)?; match bad_std(names.as_slice()) { None => {}, Some(b) => { return Err(text::cat3("package.json: `deps.std` names `", names[b].as_str(), "`, which is not a unit of the standard library (base64, bytes, collections, crc32, intern, json, num, sha256, slice, str, utf8)")); }, } *out = names; },
-        }
+        std_list(d, t, d.member(t, dn, "std"), out)?;
+        packages(d, t, d.member(t, dn, "packages"), names, paths)?;
         Ok(())
+    }
+
+    spec fn deps_read(r: &Result<(), String>, out: &[String], names: &[String], paths: &[String]) -> bool {
+        match r {
+            Ok(u) => std_part(out) && packages_part(names, paths),
+            Err(e) => true,
+        }
     }
 
     spec fn digit(b: u8) -> bool {
@@ -106,17 +115,24 @@ mod decl {
 
     #[summary("The executables that the bin object node bn declares, their names into out and the positions in units of their entry units into entries (both cleared first): each member is the name of an executable and its value the name of its entry unit, one of units, and no two executables share an entry unit")]
     #[effects(alloc)]
-    #[uses(placed, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
-    fn executables(d: &std::json::Doc, t: &[u8], bn: usize, units: &[String], out: &mut Vec<String>, entries: &mut Vec<usize>) -> (r: Result<(), String>)
-        requires std::json::node_pos(d, bn), same_text(d, t),
-        ensures out.len() == entries.len(), bin_names_ok(out.as_slice()), distinct(out.as_slice()), entries_ok(entries.as_slice(), units.len()),
+    #[uses(bins_part, placed, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn executables(d: &std::json::Doc, t: &[u8], node: Option<usize>, units: &[String], out: &mut Vec<String>, entries: &mut Vec<usize>) -> (r: Result<(), String>)
+        requires std::json::some_node(d, node), same_text(d, t),
+        ensures bins_part(out.as_slice(), entries.as_slice(), units.len()),
     {
         *out = Vec::new();
         *entries = Vec::new();
+        let bn: usize = match node {
+            None => { return Ok(()); },
+            Some(b) => b,
+        };
         let mut names: Vec<String> = Vec::new();
         keys(d, t, bn, "package.json: `bin`", &mut names)?;
+        if names.len() > 1 {
+            return Err(String::from("package.json: `bin` declares more than one executable: the units of a package are built as one program, and a program has one fn main"));
+        }
         for k in 0..names.len()
-            invariant k <= names.len(), out.len() == entries.len(), bin_names_ok(out.as_slice()), distinct(out.as_slice()), entries_ok(entries.as_slice(), units.len()),
+            invariant k <= names.len(), names.len() <= 1, out.len() <= k, out.len() == entries.len(), names_ok(out.as_slice()), distinct(out.as_slice()), entries_ok(entries.as_slice(), units.len()),
         {
             if !is_ident(names[k].as_str()) {
                 return Err(text::cat3("package.json: the executable `", names[k].as_str(), "` is not a name (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter)"));
@@ -183,6 +199,13 @@ mod decl {
         }
     }
 
+    spec fn first_unnamed(r: Option<usize>, v: &[String], p: &str) -> bool {
+        match r {
+            None => named_units(v, p),
+            Some(k) => k < v.len() && !named_after(v[k].as_str(), p),
+        }
+    }
+
     spec fn free(e: &[usize], x: usize) -> bool {
         forall|k: usize| k < e.len() ==> #[trigger] e[k] != x
     }
@@ -236,6 +259,28 @@ mod decl {
         {
             let c: u8 = s.as_bytes()[k];
             if !(97 <= c && c <= 122 || 48 <= c && c <= 57 || c == 95) {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[summary("Whether the unit s is named after the package p: s is p, or p followed by _ and more")]
+    #[effects(pure)]
+    #[uses(named_after)]
+    fn is_named_after(s: &str, p: &str) -> (r: bool)
+        ensures r == named_after(s, p),
+    {
+        if s == p {
+            return true;
+        }
+        if s.len() <= p.len() || s.as_bytes()[p.len()] != 95 {
+            return false;
+        }
+        for k in 0..p.len()
+            invariant k <= p.len(), p.len() < s.len(), forall|m: usize| m < k ==> #[trigger] s.as_bytes()[m] == p.as_bytes()[m],
+        {
+            if s.as_bytes()[k] != p.as_bytes()[k] {
                 return false;
             }
         }
@@ -325,6 +370,52 @@ mod decl {
         Ok(())
     }
 
+    #[summary("Checks the distinct units of the package name with nbins executables: at least one, each able to name a unit, and, for a library (no executable), each named after the package. The error says which unit breaks which rule")]
+    #[effects(alloc)]
+    #[uses(first_bad_ident, first_unnamed, units_part)]
+    fn library_units(name: &str, units: &[String], nbins: usize) -> (r: Result<(), String>)
+        requires distinct(units),
+        ensures units_checked(&r, name, units, nbins),
+    {
+        if units.len() == 0 {
+            return Err(String::from("package.json: `units` is empty (a package has at least one unit)"));
+        }
+        match bad_ident(units) {
+            None => {},
+            Some(k) => { return Err(text::cat3("package.json: the unit `", units[k].as_str(), "` cannot name a unit (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, and not a reserved word or std)")); },
+        }
+        if nbins == 0 {
+            match unnamed(units, name) {
+                None => {},
+                Some(k) => { return Err(text::cat5("package.json: the unit `", units[k].as_str(), "` of the library `", name, text::cat5("` is not named after it: a unit of a package without executables (bin) must be named `", name, "` or start with `", name, "_`").as_str())); },
+            }
+        }
+        Ok(())
+    }
+
+    #[summary("The declaration made of its parts, which meet the invariant valid clause by clause")]
+    #[effects(alloc)]
+    #[uses(valid)]
+    fn make(name: String, version: String, summary: String, units: Vec<String>, std: Vec<String>, dep_names: Vec<String>, dep_paths: Vec<String>, bin_names: Vec<String>, bin_entries: Vec<usize>, tests: Vec<Suite>) -> Package
+        requires ident(name.as_str()), version(version.as_str()), units_part(name.as_str(), units.as_slice(), bin_names.len()), std_part(std.as_slice()), packages_part(dep_names.as_slice(), dep_paths.as_slice()), absent(dep_names.as_slice(), name.as_str()), bins_part(bin_names.as_slice(), bin_entries.as_slice(), units.len()), suites_apart(tests.as_slice(), units.as_slice()),
+    {
+        Package { name: name, version: version, summary: summary, units: units, std: std, dep_names: dep_names, dep_paths: dep_paths, bin_names: bin_names, bin_entries: bin_entries, tests: tests }
+    }
+
+    #[summary("The naming rule of a library: the unit s is the package name p, or starts with p followed by _")]
+    spec fn named_after(s: &str, p: &str) -> bool {
+        s == p || p.len() < s.len() && s.as_bytes()[p.len()] == 95 && (forall|k: usize| k < p.len() ==> #[trigger] s.as_bytes()[k] == p.as_bytes()[k])
+    }
+
+    #[summary("Every unit of v is named after the package p")]
+    spec fn named_units(v: &[String], p: &str) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] named_after(v[k].as_str(), p)
+    }
+
+    spec fn names_ok(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> #[trigger] ident(v[k].as_str())
+    }
+
     #[summary("The text of member key of object node o; an error when it is missing or not text")]
     #[effects(alloc)]
     #[uses(std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
@@ -337,9 +428,65 @@ mod decl {
         }
     }
 
+    #[summary("The packages that the deps.packages object node pn names, into names and paths (both cleared first): each member is the name of a package and its value an object with the one member path, the non-empty path of that package's directory relative to this one")]
+    #[effects(alloc)]
+    #[uses(packages_part, placed, std::json::doc_sound, std::json::nodes_in, std::json::some_node)]
+    fn packages(d: &std::json::Doc, t: &[u8], node: Option<usize>, names: &mut Vec<String>, paths: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::some_node(d, node), same_text(d, t),
+        ensures packages_part(names.as_slice(), paths.as_slice()),
+    {
+        *names = Vec::new();
+        *paths = Vec::new();
+        let pn: usize = match node {
+            None => { return Ok(()); },
+            Some(x) => x,
+        };
+        let mut ks: Vec<String> = Vec::new();
+        keys(d, t, pn, "package.json: `deps.packages`", &mut ks)?;
+        for k in 0..ks.len()
+            invariant k <= ks.len(), names.len() == paths.len(), names_ok(names.as_slice()), distinct(names.as_slice()), paths_ok(paths.as_slice()),
+        {
+            if !is_ident(ks[k].as_str()) {
+                return Err(text::cat3("package.json: `deps.packages` names `", ks[k].as_str(), "`, which is not a package name (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter)"));
+            }
+            let what: String = text::cat3("package.json: `deps.packages.", ks[k].as_str(), "`");
+            let v: usize = match d.member(t, pn, ks[k].as_str()) {
+                None => { return Err(text::cat2(what.as_str(), " is missing")); },
+                Some(v) => v,
+            };
+            let mut inner: Vec<String> = Vec::new();
+            keys(d, t, v, what.as_str(), &mut inner)?;
+            for m in 0..inner.len()
+                invariant m <= inner.len(),
+            {
+                if inner[m] != "path" {
+                    return Err(text::cat4(what.as_str(), " has the member `", inner[m].as_str(), "` (the one member is path: no versions and no fetching yet)"));
+                }
+            }
+            let path: String = match d.member(t, v, "path") {
+                None => { return Err(text::cat2(what.as_str(), " has no `path`")); },
+                Some(pv) => match d.string_value(t, pv) { None => { return Err(text::cat2(what.as_str(), ": `path` is not text")); }, Some(pt) => pt, },
+            };
+            if path.len() == 0 {
+                return Err(text::cat2(what.as_str(), ": `path` is empty"));
+            }
+            match position(names.as_slice(), ks[k].as_str()) {
+                None => {},
+                Some(at) => { return Err(text::cat2(what.as_str(), " comes twice")); },
+            }
+            push_dep(names, paths, ks[k].clone(), path);
+        }
+        Ok(())
+    }
+
+    #[summary("The packages depended on: distinct names, each with a non-empty path")]
+    spec fn packages_part(names: &[String], paths: &[String]) -> bool {
+        names.len() == paths.len() && names_ok(names) && distinct(names) && paths_ok(paths)
+    }
+
     #[summary("Reads a declaration from the text t of package.json: a JSON object with the members name, version, summary and units, and optionally licence, deps, origin, bin and tests. Any other member, a member of the wrong kind, or a value that breaks the invariant of Package is an error that says which")]
     #[effects(alloc)]
-    #[uses(first_bad_ident, first_bad_std, placed, same_text, std::json::doc_sound, std::json::nodes_in, std::json::parsed, std::json::some_node, valid)]
+    #[uses(deps_read, placed, same_text, std::json::doc_sound, std::json::nodes_in, std::json::parsed, std::json::some_node, units_checked)]
     fn parse(t: &[u8]) -> Result<Package, String> {
         if t.len() > 16777216 {
             return Err(String::from("package.json: longer than 16 MiB"));
@@ -379,30 +526,29 @@ mod decl {
             None => { return Err(String::from("package.json: the member `units` is missing")); },
             Some(u) => strings(&d, t, u, "package.json: `units`", &mut units)?,
         }
-        if units.len() == 0 {
-            return Err(String::from("package.json: `units` is empty (a package has at least one unit)"));
-        }
-        match bad_ident(units.as_slice()) {
-            None => {},
-            Some(k) => { return Err(text::cat3("package.json: the unit `", units[k].as_str(), "` cannot name a unit (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, and not a reserved word or std)")); },
-        }
         let mut std: Vec<String> = Vec::new();
-        match d.member(t, 0, "deps") {
+        let mut dep_names: Vec<String> = Vec::new();
+        let mut dep_paths: Vec<String> = Vec::new();
+        deps(&d, t, d.member(t, 0, "deps"), &mut std, &mut dep_names, &mut dep_paths)?;
+        match position(dep_names.as_slice(), name.as_str()) {
             None => {},
-            Some(dn) => deps(&d, t, dn, &mut std)?,
+            Some(at) => { return Err(text::cat3("package.json: the package `", name.as_str(), "` depends on itself")); },
         }
         let mut bin_names: Vec<String> = Vec::new();
         let mut bin_entries: Vec<usize> = Vec::new();
-        match d.member(t, 0, "bin") {
-            None => {},
-            Some(bn) => executables(&d, t, bn, units.as_slice(), &mut bin_names, &mut bin_entries)?,
-        }
+        executables(&d, t, d.member(t, 0, "bin"), units.as_slice(), &mut bin_names, &mut bin_entries)?;
+        library_units(name.as_str(), units.as_slice(), bin_names.len())?;
         let mut tests: Vec<Suite> = Vec::new();
         match d.member(t, 0, "tests") {
             None => {},
             Some(tn) => suites(&d, t, tn, units.as_slice(), &mut tests)?,
         }
-        Ok(Package { name: name, version: version, summary: summary, units: units, std: std, bin_names: bin_names, bin_entries: bin_entries, tests: tests })
+        Ok(make(name, version, summary, units, std, dep_names, dep_paths, bin_names, bin_entries, tests))
+    }
+
+    #[summary("Every path of v is non-empty")]
+    spec fn paths_ok(v: &[String]) -> bool {
+        forall|k: usize| k < v.len() ==> 0 < #[trigger] v[k].len()
     }
 
     spec fn placed(r: Option<usize>, v: &[String], s: &str) -> bool {
@@ -428,6 +574,17 @@ mod decl {
         None
     }
 
+    #[summary("Adds the dependency name with the path, a name v does not hold, to the distinct names v and their paths w")]
+    #[effects(alloc)]
+    #[uses(absent, distinct, names_ok, paths_ok)]
+    fn push_dep(v: &mut Vec<String>, w: &mut Vec<String>, name: String, path: String) -> ()
+        requires names_ok(v.as_slice()), distinct(v.as_slice()), absent(v.as_slice(), name.as_str()), ident(name.as_str()), paths_ok(w.as_slice()), 0 < path.len(), v.len() == w.len(),
+        ensures names_ok(v.as_slice()), distinct(v.as_slice()), paths_ok(w.as_slice()), v.len() == w.len(),
+    {
+        v.push(name);
+        w.push(path);
+    }
+
     #[summary("Adds the position x of an entry unit among n units, which e does not hold, to the distinct positions e")]
     #[effects(alloc)]
     #[uses(entries_ok, free)]
@@ -440,10 +597,10 @@ mod decl {
 
     #[summary("Adds the name s of an executable, which v does not hold, to the distinct names v")]
     #[effects(alloc)]
-    #[uses(absent, bin_names_ok, distinct)]
+    #[uses(absent, distinct, names_ok)]
     fn push_name(v: &mut Vec<String>, s: String) -> ()
-        requires bin_names_ok(v.as_slice()), distinct(v.as_slice()), absent(v.as_slice(), s.as_str()), ident(s.as_str()),
-        ensures bin_names_ok(v.as_slice()), distinct(v.as_slice()), v.len() == old(v).len() + 1,
+        requires names_ok(v.as_slice()), distinct(v.as_slice()), absent(v.as_slice(), s.as_str()), ident(s.as_str()),
+        ensures names_ok(v.as_slice()), distinct(v.as_slice()), v.len() == old(v).len() + 1,
     {
         v.push(s);
     }
@@ -492,6 +649,33 @@ mod decl {
             }
         }
         None
+    }
+
+    #[summary("The standard library units of the deps.std array node, into out (cleared first; empty when there is no node): distinct units of the standard library")]
+    #[effects(alloc)]
+    #[uses(first_bad_std, std::json::doc_sound, std::json::nodes_in, std::json::some_node, std_part, std_units)]
+    fn std_list(d: &std::json::Doc, t: &[u8], node: Option<usize>, out: &mut Vec<String>) -> (r: Result<(), String>)
+        requires std::json::some_node(d, node), same_text(d, t),
+        ensures std_part(out.as_slice()),
+    {
+        *out = Vec::new();
+        let sn: usize = match node {
+            None => { return Ok(()); },
+            Some(x) => x,
+        };
+        let mut found: Vec<String> = Vec::new();
+        strings(d, t, sn, "package.json: `deps.std`", &mut found)?;
+        match bad_std(found.as_slice()) {
+            None => {},
+            Some(b) => { return Err(text::cat3("package.json: `deps.std` names `", found[b].as_str(), "`, which is not a unit of the standard library (base64, bytes, collections, crc32, intern, json, num, sha256, slice, str, utf8)")); },
+        }
+        *out = found;
+        Ok(())
+    }
+
+    #[summary("The standard library units of a declaration: distinct units of the standard library")]
+    spec fn std_part(v: &[String]) -> bool {
+        std_units(v) && distinct(v)
     }
 
     spec fn std_unit(s: &str) -> bool {
@@ -646,9 +830,37 @@ mod decl {
         ident(s) && !reserved(s)
     }
 
-    #[summary("The invariant of Package: the name is a name and the units can name units, there is at least one unit and they are distinct, the version is MAJOR.MINOR.PATCH, the standard library units are distinct units of the standard library, every executable has a distinct name and its own entry unit among the units, and no test unit has the name of a unit of the package")]
+    spec fn units_checked(r: &Result<(), String>, name: &str, units: &[String], nbins: usize) -> bool {
+        match r {
+            Ok(u) => units_part(name, units, nbins),
+            Err(e) => true,
+        }
+    }
+
+    #[summary("The units of a package named name with nbins executables: at least one, each able to name a unit, distinct, and when there is no executable each named after the package")]
+    spec fn units_part(name: &str, units: &[String], nbins: usize) -> bool {
+        0 < units.len() && idents(units) && distinct(units) && (nbins > 0 || named_units(units, name))
+    }
+
+    #[summary("The first unit of v that is not named after the package p, none when all are")]
+    #[effects(pure)]
+    #[uses(named_units)]
+    fn unnamed(v: &[String], p: &str) -> (r: Option<usize>)
+        ensures first_unnamed(r, v, p),
+    {
+        for k in 0..v.len()
+            invariant forall|m: usize| m < k ==> #[trigger] named_after(v[m].as_str(), p),
+        {
+            if !is_named_after(v[k].as_str(), p) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[summary("The invariant of Package: the name is a name and the units can name units, there is at least one unit and they are distinct, the version is MAJOR.MINOR.PATCH, the standard library units are distinct units of the standard library, the packages depended on have distinct names, none of them this package, and non-empty paths, every executable has a distinct name and its own entry unit among the units, a package without executables (a library) has only units named after it, and no test unit has the name of a unit of the package")]
     spec fn valid(p: &Package) -> bool {
-        ident(p.name.as_str()) && version(p.version.as_str()) && 0 < p.units.len() && idents(p.units.as_slice()) && distinct(p.units.as_slice()) && std_units(p.std.as_slice()) && distinct(p.std.as_slice()) && p.bin_names.len() == p.bin_entries.len() && bin_names_ok(p.bin_names.as_slice()) && distinct(p.bin_names.as_slice()) && entries_ok(p.bin_entries.as_slice(), p.units.len()) && suites_apart(p.tests.as_slice(), p.units.as_slice())
+        ident(p.name.as_str()) && version(p.version.as_str()) && units_part(p.name.as_str(), p.units.as_slice(), p.bin_names.len()) && std_part(p.std.as_slice()) && packages_part(p.dep_names.as_slice(), p.dep_paths.as_slice()) && absent(p.dep_names.as_slice(), p.name.as_str()) && bins_part(p.bin_names.as_slice(), p.bin_entries.as_slice(), p.units.len()) && suites_apart(p.tests.as_slice(), p.units.as_slice())
     }
 
     #[summary("MAJOR.MINOR.PATCH: decimal digits with exactly two dots, neither at an end nor next to the other")]

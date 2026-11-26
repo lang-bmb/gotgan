@@ -1,0 +1,16 @@
+{
+  "name": "dr",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "dr"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "twice": {
+        "path": "./../twice/"
+      }
+    }
+  }
+}

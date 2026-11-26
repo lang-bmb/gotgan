@@ -1,0 +1,11 @@
+#[summary("The left side of a diamond")]
+mod dl {
+    #[summary("Twice x, through twice")]
+    #[effects(pure)]
+    fn left(x: u64) -> (r: u64)
+        requires x <= 4611686018427387903,
+        ensures r == 2 * x,
+    {
+        twice::double(x)
+    }
+}

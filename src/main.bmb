@@ -55,20 +55,21 @@ mod main {
             usage();
         }
         let p: decl::Package = load(dir.as_str());
+        let nodes: Vec<resolve::Node> = resolve::closure(dir.as_str(), &p);
         if command == "check" {
-            if !commands::check(dir.as_str(), &p) {
+            if !commands::check(dir.as_str(), &p, nodes.as_slice()) {
                 std::process::exit(1);
             }
         } else if command == "verify" {
-            if !commands::verify(dir.as_str(), &p) {
+            if !commands::verify(&p, nodes.as_slice()) {
                 std::process::exit(1);
             }
         } else if command == "test" {
-            let code: u8 = commands::test(dir.as_str(), &p);
+            let code: u8 = commands::test(dir.as_str(), &p, nodes.as_slice());
             if code != 0 {
                 std::process::exit(code as i32);
             }
-        } else if !commands::build(dir.as_str(), &p) {
+        } else if !commands::build(dir.as_str(), &p, nodes.as_slice()) {
             std::process::exit(1);
         }
     }
@@ -79,7 +80,14 @@ mod main {
         if !decl::is_unit_name(name) || name == "driver" {
             eprint_str("gotgan: new: `");
             eprint_str(name);
-            eprint_str("` cannot name a package (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, not a reserved word, std or driver)\n");
+            eprint_str("` cannot name a package (1 to 64 bytes of lower-case ASCII letters, digits and _, the first a letter, not a reserved word, std or driver)");
+            let u: String = underscored(name);
+            if u != name && decl::is_unit_name(u.as_str()) && u != "driver" {
+                eprint_str("; did you mean `");
+                eprint_str(u.as_str());
+                eprint_str("`?");
+            }
+            eprint_str("\n");
             std::process::exit(2);
         }
         let mut target: String = String::from(name);
@@ -94,6 +102,25 @@ mod main {
         text::put_str(&mut r, "path", target.as_str());
         text::put_bool(&mut r, "ok", true);
         text::emit(r.as_str());
+    }
+
+    #[summary("name with each - written _ (the spelling of a Rust crate name as a BMB name)")]
+    #[effects(alloc)]
+    fn underscored(name: &str) -> String {
+        let mut v: Vec<u8> = Vec::new();
+        for k in 0..name.len()
+            invariant k <= name.len(),
+        {
+            if name.as_bytes()[k] == 45 {
+                v.push(95);
+            } else {
+                v.push(name.as_bytes()[k]);
+            }
+        }
+        match String::from_utf8(v) {
+            Ok(s) => s,
+            Err(bad) => String::from(name),
+        }
     }
 
     #[summary("Ends gotgan on a bad command line with exit code 2")]

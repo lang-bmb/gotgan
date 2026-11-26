@@ -1,0 +1,16 @@
+{
+  "name": "uses_badname",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "uses_badname"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "badname": {
+        "path": "../badname"
+      }
+    }
+  }
+}

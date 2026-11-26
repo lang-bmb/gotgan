@@ -1,0 +1,10 @@
+#[summary("Half of a cycle of dependencies")]
+mod clash {
+    #[summary("one")]
+    #[effects(pure)]
+    fn one() -> (r: u64)
+        ensures r == 1,
+    {
+        1
+    }
+}

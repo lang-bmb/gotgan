@@ -1,0 +1,19 @@
+{
+  "name": "diamond_bad",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "diamond_bad"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "dl": {
+        "path": "../dl"
+      },
+      "dr_copy": {
+        "path": "../dr_copy"
+      }
+    }
+  }
+}

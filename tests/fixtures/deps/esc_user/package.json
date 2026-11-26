@@ -1,0 +1,16 @@
+{
+  "name": "esc_user",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "esc_user"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "esc_lib": {
+        "path": "../esc_lib"
+      }
+    }
+  }
+}

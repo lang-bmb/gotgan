@@ -1,0 +1,16 @@
+{
+  "name": "unused",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "unused"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "twice": {
+        "path": "../twice"
+      }
+    }
+  }
+}

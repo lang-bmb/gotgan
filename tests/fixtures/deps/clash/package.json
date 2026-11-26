@@ -1,0 +1,19 @@
+{
+  "name": "clash",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "clash"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "ab": {
+        "path": "../ab"
+      },
+      "ab_c": {
+        "path": "../ab_c"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "cyc_b",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "cyc_b"
+  ],
+  "deps": {
+    "std": [],
+    "packages": {
+      "cyc_a": {
+        "path": "../cyc_a"
+      }
+    }
+  }
+}

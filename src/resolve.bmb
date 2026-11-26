@@ -1,0 +1,291 @@
+#[summary("The closure of a package's dependencies: reading the declarations of the packages it depends on by path, and of theirs, into one list of nodes, with the checks that the closure is a package graph gotgan can pass to the compiler as one program: each package at one directory, none with executables, no cycle, and no unit name twice")]
+mod resolve {
+    #[summary("A package of the closure: its name, its directory (lexically normal), its units, the names of the packages it depends on with their directories, and its standard library units")]
+    #[invariant(node_sound)]
+    struct Node { name: String, dir: String, units: Vec<String>, deps: Vec<String>, dep_dirs: Vec<String>, std: Vec<String> }
+
+    #[summary("Adds the edge a -> b between two of n nodes")]
+    #[effects(alloc)]
+    #[uses(edges_in)]
+    fn add_edge(from: &mut Vec<usize>, to: &mut Vec<usize>, a: usize, b: usize, n: usize) -> ()
+        requires edges_in(from.as_slice(), to.as_slice(), n), a < n, b < n,
+        ensures edges_in(from.as_slice(), to.as_slice(), n),
+    {
+        from.push(a);
+        to.push(b);
+    }
+
+    #[summary("Adds the node m of the package name to the closure, which then holds one more package")]
+    #[effects(alloc)]
+    #[uses(edges_in)]
+    fn add_node(names: &mut Vec<String>, nodes: &mut Vec<Node>, from: &[usize], to: &[usize], name: String, m: Node) -> ()
+        requires names.len() == nodes.len(), edges_in(from, to, names.len()),
+        ensures names.len() == nodes.len(), names.len() == old(names).len() + 1, edges_in(from, to, names.len()),
+    {
+        names.push(name);
+        nodes.push(m);
+    }
+
+    #[summary("The closure of the package p at the directory dir: p first, then each package it depends on, and theirs, once each, in the order they are first reached. Ends gotgan with exit code 2 when a declaration cannot be read or is not valid, a package is reached at two directories, a dependency has executables, the dependencies have a cycle, two packages have a unit of the same name, or there are more than 256 packages")]
+    #[effects(alloc, io, nondet)]
+    #[uses(decl::placed, node_sound)]
+    fn closure(dir: &str, p: &decl::Package) -> Vec<Node> {
+        let root: String = normalize(dir);
+        let mut nodes: Vec<Node> = Vec::new();
+        let mut names: Vec<String> = Vec::new();
+        let mut from: Vec<usize> = Vec::new();
+        let mut to: Vec<usize> = Vec::new();
+        add_node(&mut names, &mut nodes, from.as_slice(), to.as_slice(), p.name.clone(), node_of(root.as_str(), p));
+        let mut i: usize = 0;
+        while i < nodes.len()
+            invariant i <= nodes.len(), names.len() == nodes.len(), nodes.len() <= 256, edges_in(from.as_slice(), to.as_slice(), names.len()),
+            decreases 256 - i,
+        {
+            let here: String = nodes[i].name.clone();
+            let ds: Vec<String> = nodes[i].deps.clone();
+            let dd: Vec<String> = nodes[i].dep_dirs.clone();
+            for k in 0..ds.len()
+                invariant i < nodes.len(), names.len() == nodes.len(), nodes.len() <= 256, edges_in(from.as_slice(), to.as_slice(), names.len()), ds.len() == dd.len(),
+            {
+                match decl::position(names.as_slice(), ds[k].as_str()) {
+                    None => { if nodes.len() >= 256 { fail("more than 256 packages in the closure of the dependencies"); } let m: Node = load_dep(ds[k].as_str(), dd[k].as_str(), here.as_str()); add_node(&mut names, &mut nodes, from.as_slice(), to.as_slice(), ds[k].clone(), m); add_edge(&mut from, &mut to, i, names.len() - 1, names.len()); },
+                    Some(j) => { if nodes[j].dir != dd[k] { fail(text::cat5("the package `", ds[k].as_str(), "` is reached at two directories: ", nodes[j].dir.as_str(), text::cat4(" and ", dd[k].as_str(), " (from `", text::cat2(here.as_str(), "`)").as_str()).as_str()).as_str()); } add_edge(&mut from, &mut to, i, j, names.len()); },
+                }
+            }
+            i = i + 1;
+        }
+        let mut lv: Vec<usize> = Vec::new();
+        match order(names.len(), from.as_slice(), to.as_slice(), &mut lv) {
+            None => {},
+            Some(k) => { fail(text::cat5("the dependencies have a cycle through `", names[from[k]].as_str(), "` and `", names[to[k]].as_str(), "`").as_str()); },
+        }
+        let mut all: Vec<String> = Vec::new();
+        let mut owner: Vec<usize> = Vec::new();
+        for v in 0..nodes.len()
+            invariant v <= nodes.len(), all.len() == owner.len(),
+        {
+            for u in 0..nodes[v].units.len()
+                invariant v < nodes.len(), all.len() == owner.len(),
+            {
+                all.push(nodes[v].units[u].clone());
+                owner.push(v);
+            }
+        }
+        match first_repeat(all.as_slice()) {
+            None => {},
+            Some(j) => { let mut first: usize = 0; while first < j && all[first] != all[j] invariant first <= j, j < all.len(), decreases j - first, { first = first + 1; } let a: usize = owner[first]; let b: usize = owner[j]; if a < nodes.len() && b < nodes.len() { fail(text::cat5("the unit `", all[j].as_str(), "` is a unit of both `", nodes[a].name.as_str(), text::cat3("` and `", nodes[b].name.as_str(), "`: the units of a package and of its dependencies share one namespace").as_str()).as_str()); } fail(text::cat3("the unit `", all[j].as_str(), "` comes twice in the closure of the dependencies").as_str()); },
+        }
+        nodes
+    }
+
+    #[summary("The component of the path p from a to i: a is the start of p or follows a /, and i is the end of p or holds a /")]
+    #[effects(alloc)]
+    fn component(p: &str, a: usize, i: usize) -> String
+        requires a <= i, i <= p.len(), a == 0 || p.as_bytes()[a - 1] == 47, i == p.len() || p.as_bytes()[i] == 47,
+    {
+        String::from(&p[a..i])
+    }
+
+    #[summary("The components of the path p, the texts between its slashes, in order")]
+    #[effects(alloc)]
+    fn components(p: &str) -> Vec<String> {
+        let n: usize = p.len();
+        let mut out: Vec<String> = Vec::new();
+        let mut a: usize = 0;
+        let mut i: usize = 0;
+        while i <= n
+            invariant a <= i, i <= n + 1, a == 0 || a == n + 1 || a <= n && p.as_bytes()[a - 1] == 47,
+            decreases n + 1 - i,
+        {
+            if i == n || p.as_bytes()[i] == 47 {
+                out.push(component(p, a, i));
+                a = i + 1;
+            }
+            i = i + 1;
+        }
+        out
+    }
+
+    spec fn distinct_upto(v: &[String], n: usize) -> bool {
+        n <= v.len() && (forall|i: usize, j: usize| i < j && j < n ==> #[trigger] v[i] != #[trigger] v[j])
+    }
+
+    #[summary("Every edge k, from from[k] to to[k], joins two of n nodes")]
+    spec fn edges_in(from: &[usize], to: &[usize], n: usize) -> bool {
+        from.len() == to.len() && (forall|k: usize| k < from.len() ==> #[trigger] from[k] < n && to[k] < n)
+    }
+
+    #[summary("Ends gotgan with the message why and exit code 2: the closure is not a package graph gotgan can use")]
+    #[effects(io)]
+    fn fail(why: &str) -> ()
+        ensures false,
+    {
+        eprint_str("gotgan: ");
+        eprint_str(why);
+        eprint_str("\n");
+        std::process::exit(2);
+    }
+
+    #[summary("The first position of v that holds a text an earlier position holds, none when the texts are distinct")]
+    #[effects(pure)]
+    #[uses(decl::absent, decl::distinct, decl::placed, distinct_upto)]
+    fn first_repeat(v: &[String]) -> (r: Option<usize>)
+        ensures repeat(r, v),
+    {
+        for j in 0..v.len()
+            invariant distinct_upto(v, j),
+        {
+            for i in 0..j
+                invariant forall|m: usize| m < i ==> #[trigger] v[m] != v[j],
+            {
+                if v[i] == v[j] {
+                    return Some(j);
+                }
+            }
+        }
+        None
+    }
+
+    #[summary("The directory that path names, read from the directory dir: path itself when it is absolute, else dir/path, normalized")]
+    #[effects(alloc)]
+    fn join(dir: &str, path: &str) -> String {
+        if path.len() > 0 && path.as_bytes()[0] == 47 {
+            return normalize(path);
+        }
+        normalize(text::cat3(dir, "/", path).as_str())
+    }
+
+    #[summary("Reads the package name at the directory dir as a dependency of the package from: its declaration must be valid, be named name and have no executables. Ends gotgan with exit code 2 otherwise")]
+    #[effects(alloc, io, nondet)]
+    fn load_dep(name: &str, dir: &str, from: &str) -> Node {
+        let path: String = text::cat2(dir, "/package.json");
+        let what: String = text::cat5("the dependency `", name, "` of `", from, text::cat3("` (", dir, ")").as_str());
+        let t: Vec<u8> = match std::fs::read(path.as_str()) {
+            Ok(b) => b,
+            Err(e) => { fail(text::cat4(what.as_str(), ": cannot read ", path.as_str(), text::cat2(": ", e.message.as_str()).as_str()).as_str()); std::process::exit(2); },
+        };
+        let p: decl::Package = match decl::parse(t.as_slice()) {
+            Ok(p) => p,
+            Err(why) => { fail(text::cat3(what.as_str(), ": ", why.as_str()).as_str()); std::process::exit(2); },
+        };
+        if p.name != name {
+            fail(text::cat4(what.as_str(), ": the package there is named `", p.name.as_str(), "`").as_str());
+        }
+        if p.bin_names.len() > 0 {
+            fail(text::cat2(what.as_str(), " has executables (bin): a package with executables cannot be a dependency").as_str());
+        }
+        node_of(dir, &p)
+    }
+
+    #[summary("The node of the package p read from the directory dir: the directories of its dependencies are read from dir")]
+    #[effects(alloc)]
+    #[uses(decl::packages_part, decl::valid, node_sound)]
+    fn node_of(dir: &str, p: &decl::Package) -> Node {
+        let mut dirs: Vec<String> = Vec::new();
+        for k in 0..p.dep_paths.len()
+            invariant dirs.len() == k,
+        {
+            dirs.push(join(dir, p.dep_paths[k].as_str()));
+        }
+        Node { name: p.name.clone(), dir: String::from(dir), units: p.units.clone(), deps: p.dep_names.clone(), dep_dirs: dirs, std: p.std.clone() }
+    }
+
+    spec fn node_sound(n: &Node) -> bool {
+        n.deps.len() == n.dep_dirs.len()
+    }
+
+    #[summary("The path p with its empty and . components dropped and each .. taking away the component before it, lexically (symbolic links are not followed); . for an empty relative result")]
+    #[effects(alloc)]
+    fn normalize(p: &str) -> String {
+        let absolute: bool = p.len() > 0 && p.as_bytes()[0] == 47;
+        let cs: Vec<String> = components(p);
+        let mut parts: Vec<String> = Vec::new();
+        for k in 0..cs.len()
+            invariant k <= cs.len(),
+        {
+            if cs[k] == ".." {
+                if parts.len() > 0 && parts[parts.len() - 1] != ".." {
+                    match parts.pop() {
+                        None => {},
+                        Some(gone) => {},
+                    }
+                } else if !absolute {
+                    parts.push(cs[k].clone());
+                }
+            } else if cs[k].len() > 0 && cs[k] != "." {
+                parts.push(cs[k].clone());
+            }
+        }
+        let mut out: String = String::new();
+        if absolute {
+            out.push_str("/");
+        }
+        for k in 0..parts.len()
+            invariant k <= parts.len(),
+        {
+            if k > 0 {
+                out.push_str("/");
+            }
+            out.push_str(parts[k].as_str());
+        }
+        if out.len() == 0 {
+            out.push_str(".");
+        }
+        out
+    }
+
+    #[summary("Ranks the n nodes of the graph with the edges from[k] -> to[k] into lv so that every edge goes down in rank, or gives an edge that lies on a cycle. Rank = the longest path below, found by relaxing every edge n + 1 times; an edge that still goes up afterwards closes a cycle. Some(k) is only claimed to be an edge; None is proved to come with a ranking")]
+    #[effects(alloc)]
+    #[uses(edges_in, ranks)]
+    fn order(n: usize, from: &[usize], to: &[usize], lv: &mut Vec<usize>) -> (r: Option<usize>)
+        requires edges_in(from, to, n), n < 1048576,
+        ensures ordered(r, lv.as_slice(), from, to, n),
+    {
+        *lv = Vec::new();
+        for v in 0..n
+            invariant lv.len() == v, forall|m: usize| m < v ==> #[trigger] lv[m] == 0,
+        {
+            lv.push(0);
+        }
+        for round in 0..n + 1
+            invariant lv.len() == n, forall|v: usize| v < n ==> #[trigger] lv[v] <= n + 1,
+        {
+            for k in 0..from.len()
+                invariant lv.len() == n, forall|v: usize| v < n ==> #[trigger] lv[v] <= n + 1,
+            {
+                let a: usize = from[k];
+                let b: usize = to[k];
+                if lv[a] <= lv[b] && lv[b] < n + 1 {
+                    lv[a] = lv[b] + 1;
+                }
+            }
+        }
+        for k in 0..from.len()
+            invariant lv.len() == n, forall|m: usize| m < k ==> from[m] < n && to[m] < n && lv[#[trigger] from[m]] > lv[to[m]],
+        {
+            if lv[from[k]] <= lv[to[k]] {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    spec fn ordered(r: Option<usize>, lv: &[usize], from: &[usize], to: &[usize], n: usize) -> bool {
+        match r {
+            None => ranks(lv, from, to, n),
+            Some(k) => k < from.len(),
+        }
+    }
+
+    #[summary("lv ranks n nodes so that every edge goes from a higher rank to a lower one: a certificate that the edges have no cycle")]
+    spec fn ranks(lv: &[usize], from: &[usize], to: &[usize], n: usize) -> bool {
+        lv.len() == n && from.len() == to.len() && (forall|k: usize| k < from.len() ==> from[k] < n && to[k] < n && lv[#[trigger] from[k]] > lv[to[k]])
+    }
+
+    spec fn repeat(r: Option<usize>, v: &[String]) -> bool {
+        match r {
+            None => decl::distinct(v),
+            Some(j) => j < v.len(),
+        }
+    }
+}

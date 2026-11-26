@@ -1,0 +1,11 @@
+#[summary("The right side of a diamond whose twice is another directory")]
+mod dr_copy {
+    #[summary("Twice x, through twice")]
+    #[effects(pure)]
+    fn right(x: u64) -> (r: u64)
+        requires x <= 4611686018427387903,
+        ensures r == 2 * x,
+    {
+        twice::double(x)
+    }
+}

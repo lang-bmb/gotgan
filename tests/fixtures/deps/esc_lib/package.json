@@ -1,0 +1,11 @@
+{
+  "name": "esc_lib",
+  "version": "0.1.0",
+  "summary": "A fixture of gotgan",
+  "units": [
+    "esc_lib"
+  ],
+  "deps": {
+    "std": []
+  }
+}

@@ -1,0 +1,11 @@
+#[summary("The start of the chain: calls tb only, so it declares only tb")]
+mod ta {
+    #[summary("x plus two, through tb")]
+    #[effects(pure)]
+    fn h(x: u64) -> (r: u64)
+        requires x < 800,
+        ensures r == x + 2,
+    {
+        tb::f(x)
+    }
+}

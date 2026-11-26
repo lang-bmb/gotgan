@@ -3,28 +3,28 @@ mod skeleton {
     #[summary("The text of tests/cases.txt of a new package")]
     #[effects(alloc)]
     fn cases() -> String {
-        String::from("# Test cases, one per line: ARGS|STDIN|STDOUT. ARGS are the arguments of\n# tests/driver.bmb (separated by spaces), STDIN what it reads on standard\n# input and STDOUT what it must write on standard output (the driver ends it\n# with a newline), written with the escapes \\\\, \\xHH, \\n, \\r and \\t. Lines that start with # are comments.\n|banana|3\\n\n|xyz|0\\n\n|\\x61\\x61|2\\n\n")
+        String::from("# Format: args|stdin|stdout (the format of this suite in package.json).\n# One case per line: ARGS|STDIN|STDOUT. ARGS are the arguments of\n# tests/driver.bmb, separated by spaces; STDIN is what it reads on its\n# standard input (nothing here); STDOUT is what it must write on its\n# standard output. STDIN and STDOUT are written with the escapes \\\\, \\xHH,\n# \\n, \\r and \\t. Lines that start with # are comments.\nbanana||3\\n\nxyz||0\\n\naa||2\\n\n")
     }
 
-    #[summary("The text of package.json of a new package name")]
+    #[summary("The text of package.json of a new package name, with stubs of licence and origin to fill in")]
     #[effects(alloc)]
     fn declaration(name: &str) -> String {
         let mut s: String = String::from("{\n  \"name\": \"");
         s.push_str(name);
-        s.push_str("\",\n  \"version\": \"0.1.0\",\n  \"summary\": \"What the package is, in one sentence\",\n  \"units\": [\"");
+        s.push_str("\",\n  \"version\": \"0.1.0\",\n  \"summary\": \"What the package is, in one sentence\",\n  \"licence\": \"The licence of the package, as an SPDX expression\",\n  \"units\": [\"");
         s.push_str(name);
-        s.push_str("\"],\n  \"deps\": {\n    \"std\": []\n  },\n  \"tests\": [\n    {\n      \"units\": [\"driver\"],\n      \"cases\": [\"cases.txt\"],\n      \"format\": \"args|stdin|stdout\"\n    }\n  ]\n}\n");
+        s.push_str("\"],\n  \"deps\": {\n    \"std\": []\n  },\n  \"origin\": {\n    \"crate\": \"\",\n    \"version\": \"\",\n    \"repository\": \"\",\n    \"commit\": \"\",\n    \"licence\": \"\"\n  },\n  \"tests\": [\n    {\n      \"units\": [\"driver\"],\n      \"cases\": [\"cases.txt\"],\n      \"format\": \"args|stdin|stdout\"\n    }\n  ]\n}\n");
         s
     }
 
-    #[summary("The text of tests/driver.bmb of a new package name, in normal form: writes how many bytes of standard input are a")]
+    #[summary("The text of tests/driver.bmb of a new package name, in normal form: writes how many bytes of its argument are a; it reads no standard input")]
     #[effects(alloc)]
     fn driver(name: &str) -> String {
         let mut s: String = String::from("#[summary(\"Test driver of the package ");
         s.push_str(name);
-        s.push_str(": writes how many bytes of standard input are the letter a\")]\nmod driver {\n    #[effects(alloc, io, nondet)]\n    fn main() -> () {\n        let mut input: Vec<u8> = Vec::new();\n        match std::io::read_to_end(&mut input) {\n            Ok(n) => {},\n            Err(e) => { eprint_str(\"driver: cannot read standard input\\n\"); std::process::exit(2); },\n        }\n        let n: usize = ");
+        s.push_str(": writes how many bytes of its one argument are the letter a\")]\nmod driver {\n    #[effects(alloc, io, nondet)]\n    fn main() -> () {\n        let args: Vec<String> = std::env::args();\n        if args.len() != 2 {\n            eprint_str(\"usage: driver TEXT\\n\");\n            std::process::exit(2);\n        }\n        let n: usize = ");
         s.push_str(name);
-        s.push_str("::count(input.as_slice(), b'a');\n        print_u64(n as u64);\n    }\n}\n");
+        s.push_str("::count(args[1].as_bytes(), b'a');\n        print_u64(n as u64);\n    }\n}\n");
         s
     }
 

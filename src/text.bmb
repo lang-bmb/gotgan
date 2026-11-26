@@ -1,4 +1,4 @@
-#[summary("Text helpers of gotgan: joining texts, writing result rows as JSON objects, showing bytes in the escape form of the case files, comparing bytes, and sorting names")]
+#[summary("Text helpers of gotgan: joining texts, writing result rows as JSON objects, showing bytes in the escape form of the case files and comparing bytes")]
 mod text {
     #[summary("a then b")]
     #[effects(alloc)]
@@ -166,21 +166,5 @@ mod text {
             Ok(s) => s,
             Err(e) => String::new(),
         }
-    }
-
-    #[summary("The names v in byte order (the order in which bmb fmt --check compares several files)")]
-    #[effects(alloc)]
-    #[uses(std::slice::below, std::slice::sorted_order)]
-    fn sorted(v: &[String]) -> (r: Vec<String>)
-        ensures r.len() == v.len(),
-    {
-        let order: Vec<usize> = std::slice::sort_indices::<String>(v);
-        let mut out: Vec<String> = Vec::new();
-        for k in 0..order.len()
-            invariant out.len() == k, order.len() == v.len(),
-        {
-            out.push(v[order[k]].clone());
-        }
-        out
     }
 }
