@@ -1,0 +1,11 @@
+#[summary("A function whose postcondition does not hold: gotgan verify must fail")]
+mod unproved {
+    #[summary("x plus one, claimed to be at most x")]
+    #[effects(pure)]
+    fn next(x: u64) -> (r: u64)
+        requires x < 100,
+        ensures r <= x,
+    {
+        x + 1
+    }
+}

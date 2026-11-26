@@ -1,0 +1,96 @@
+# Test cases of the hex package, kept as data.
+#
+# One case per line: OPERATION|INPUT|EXPECTED. OPERATION is the command line
+# of tests/driver.bmb (words separated by spaces), INPUT is what it reads on
+# standard input and EXPECTED is what it must write on standard output. INPUT
+# and EXPECTED are written with the escapes of printf %b (\xHH for a byte,
+# \\ for a backslash, \x7c for |). Lines that start with # are comments.
+
+# ---- From the original crate, src/lib.rs `mod test` ----
+
+# test_encode_to_slice
+encode_to_slice 8|kiwi|6b697769
+encode_to_slice 10|kiwis|6b69776973
+encode_to_slice 100|kiwis|Err(InvalidStringLength)
+
+# test_decode_to_slice
+decode_to_slice 4|6b697769|kiwi
+decode_to_slice 5|6b69776973|kiwis
+decode_to_slice 4|6|Err(OddLength)
+
+# test_encode
+encode|foobar|666f6f626172
+
+# test_decode
+decode|666f6f626172|foobar
+
+# test_from_hex_okay_str and test_from_hex_okay_bytes (a str and a byte
+# string are the same input here)
+decode|666f6f626172|foobar
+decode|666F6F626172|foobar
+
+# test_invalid_length
+decode|1|Err(OddLength)
+decode|666f6f6261721|Err(OddLength)
+
+# test_invalid_char
+decode|66ag|Err(InvalidHexCharacter { c: 'g', index: 3 })
+
+# test_empty
+decode||
+
+# test_from_hex_whitespace
+decode|666f 6f62617|Err(InvalidHexCharacter { c: ' ', index: 4 })
+
+# test_from_hex_array: <[u8; 6]>::from_hex and <[u8; 5]>::from_hex, which are
+# decode_to_slice into an array of that length
+decode_to_slice 6|666f6f626172|\x66\x6f\x6f\x62\x61\x72
+decode_to_slice 5|666f6f626172|Err(InvalidStringLength)
+
+# test_to_hex: encode_hex::<String> and encode_hex_upper::<String>
+encode|\x66\x6f\x6f\x62\x61\x72|666f6f626172
+encode_upper|\x66\x6f\x6f\x62\x61\x72|666F6F626172
+
+# ---- From the original crate, src/error.rs `mod tests` (test_display) ----
+
+# FromHexError::InvalidHexCharacter { c: '\n', index: 5 }.to_string(): the
+# first non-digit of this input is '\n' at position 5
+decode display|00000\n|Invalid character '\\n' at position 5
+# FromHexError::OddLength.to_string()
+decode display|1|Odd number of digits
+# FromHexError::InvalidStringLength.to_string()
+decode_to_slice 5 display|666f6f626172|Invalid string length
+
+# ---- From the original crate, the examples in the documentation ----
+
+encode|Hello world!|48656c6c6f20776f726c6421
+encode|\x01\x02\x03\x0f\x10|0102030f10
+encode_upper|Hello world!|48656C6C6F20776F726C6421
+encode_upper|\x01\x02\x03\x0f\x10|0102030F10
+decode|48656c6c6f20776f726c6421|Hello world!
+decode|123|Err(OddLength)
+# The documentation only says this is an error; it is OddLength.
+decode|foo|Err(OddLength)
+decode_to_slice 4|6b697769|kiwi
+encode_to_slice 8|kiwi|6b697769
+# <[u8; 12]>::from_hex
+decode_to_slice 12|48656c6c6f20776f726c6421|Hello world!
+# "Hello world!".encode_hex::<String>()
+encode|Hello world!|48656c6c6f20776f726c6421
+
+# ---- RFC 4648 §10, the BASE16 test vectors ----
+
+encode_upper||
+encode_upper|f|66
+encode_upper|fo|666F
+encode_upper|foo|666F6F
+encode_upper|foob|666F6F62
+encode_upper|fooba|666F6F6261
+encode_upper|foobar|666F6F626172
+decode||
+decode|66|f
+decode|666F|fo
+decode|666F6F|foo
+decode|666F6F62|foob
+decode|666F6F6261|fooba
+decode|666F6F626172|foobar

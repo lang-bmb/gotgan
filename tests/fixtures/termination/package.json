@@ -1,0 +1,9 @@
+{
+  "name": "termination",
+  "version": "0.1.0",
+  "summary": "A loop that runs until its input ends, so its termination is not proved",
+  "units": ["termination"],
+  "deps": {
+    "std": []
+  }
+}

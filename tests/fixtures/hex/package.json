@@ -1,0 +1,24 @@
+{
+  "name": "hex",
+  "version": "0.1.0",
+  "summary": "Bytes as hexadecimal text and back (RFC 4648 base16): encode, encode_upper, decode and the slice variants, with exact contracts and a proved round trip",
+  "licence": "MIT",
+  "units": ["hex"],
+  "deps": {
+    "std": ["num"]
+  },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt", "reference.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ],
+  "origin": {
+    "crate": "hex",
+    "version": "0.4.3",
+    "repository": "https://github.com/KokaKiwi/rust-hex",
+    "commit": "b2b4370b5bf021b98ee7adc92233e8de3f2de792",
+    "licence": "MIT OR Apache-2.0"
+  }
+}

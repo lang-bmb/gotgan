@@ -1,0 +1,9 @@
+{
+  "name": "std_mismatch",
+  "version": "0.1.0",
+  "summary": "Calls std::num but does not declare it",
+  "units": ["std_mismatch"],
+  "deps": {
+    "std": ["str"]
+  }
+}

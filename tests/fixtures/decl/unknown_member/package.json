@@ -1,0 +1,7 @@
+{
+  "name": "unknown_member",
+  "version": "0.1.0",
+  "summary": "A member the declaration does not have",
+  "units": ["unknown_member"],
+  "dependencies": {}
+}

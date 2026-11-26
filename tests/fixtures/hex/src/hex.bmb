@@ -1,0 +1,376 @@
+#[summary("hex: bytes as hexadecimal text and back (RFC 4648 §8, base16), ported from the Rust crate hex 0.4.3. encode and encode_upper give two digits per byte, high half first, and are proved to decode back; decode accepts both cases and its result is specified exactly: the bytes, or OddLength, or the first byte that is not a digit with its position. The slice variants are specified the same way, and the round trip decode(encode(s)) == Ok(s) is proved")]
+mod hex {
+    #[summary("The digits of the 16 values in lower case")]
+    const HEX_CHARS_LOWER: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102];
+    #[summary("The digits of the 16 values in upper case")]
+    const HEX_CHARS_UPPER: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 65, 66, 67, 68, 69, 70];
+
+    #[summary("Why decoding failed. InvalidHexCharacter(c, index): the byte c at position index is not a digit (0-9, a-f, A-F). OddLength: the text has an odd number of bytes. InvalidStringLength: the output slice does not have the length the input needs")]
+    enum FromHexError { InvalidHexCharacter(u8, usize), OddLength, InvalidStringLength }
+
+    #[summary("r is Ok with the bytes of s")]
+    spec fn back(s: &[u8], r: Result<Vec<u8>, FromHexError>) -> bool {
+        match r {
+            Ok(v) => v.len() == s.len() && (forall|k: usize| k < s.len() ==> #[trigger] v[k] == s[k]),
+            Err(e) => false,
+        }
+    }
+
+    #[summary("The text Rust's derived Debug writes for e (the character as a char, as in the original)")]
+    #[effects(alloc)]
+    fn debug(e: FromHexError) -> String {
+        let mut s: String = String::new();
+        match e {
+            FromHexError::InvalidHexCharacter(c, index) => { s.push_str("InvalidHexCharacter { c: "); push_debug_char(&mut s, c); s.push_str(", index: "); std::num::push_u64(&mut s, index as u64); s.push_str(" }"); },
+            FromHexError::OddLength => s.push_str("OddLength"),
+            FromHexError::InvalidStringLength => s.push_str("InvalidStringLength"),
+        }
+        s
+    }
+
+    #[summary("v holds the bytes of the first n pairs of t, whose digits are all digits (the loop of decode)")]
+    spec fn dec_prefix(t: &[u8], v: &[u8], n: usize) -> bool {
+        v.len() == n && 2 * n <= t.len() && hex_upto(t, 2 * n) && (forall|k: usize| k < n ==> #[trigger] v[k] == pair(t, k))
+    }
+
+    #[summary("The first n bytes of s are the pairs of t (the loop of encode_to_string)")]
+    spec fn dec_upto(t: &[u8], s: &[u8], n: usize) -> bool {
+        n <= s.len() && (forall|k: usize| k < n ==> #[trigger] s[k] == pair(t, k))
+    }
+
+    #[summary("The bytes the hex text data stands for. Upper and lower case digits are both accepted, also mixed. The error is OddLength for an odd length, else InvalidHexCharacter with the first byte that is not a digit and its position")]
+    #[effects(alloc)]
+    #[uses(decodes, failed, first_bad, hex_upto, is_hex, pair, val_of)]
+    fn decode(data: &[u8]) -> (r: Result<Vec<u8>, FromHexError>)
+        ensures decoded(data, r),
+    {
+        if data.len() % 2 != 0 {
+            return Err(FromHexError::OddLength);
+        }
+        let n: usize = data.len() / 2;
+        let mut out: Vec<u8> = Vec::with_capacity(n);
+        for i in 0..n
+            invariant 2 * n == data.len(), dec_prefix(data, out.as_slice(), i),
+        {
+            let high: u8 = val(data[2 * i], 2 * i)?;
+            let low: u8 = val(data[2 * i + 1], 2 * i + 1)?;
+            assert(high < 16 && low < 16 ==> high << 4 | low == high * 16 + low) by (bit_vector);
+            out.push(high << 4 | low);
+        }
+        Ok(out)
+    }
+
+    #[summary("Decodes the hex text data into out, which must have half its length (InvalidStringLength otherwise). The errors are checked in the order OddLength, InvalidStringLength, InvalidHexCharacter. On InvalidHexCharacter the pairs before the failing one are already written to out, as in the origin; the contract does not state what out holds then")]
+    #[effects(pure)]
+    #[uses(decodes, first_bad, hex_upto, is_hex, pair, slice_failed, val_of)]
+    fn decode_to_slice(data: &[u8], out: &mut [u8]) -> (r: Result<(), FromHexError>)
+        ensures slice_decoded(data, out, r),
+    {
+        if data.len() % 2 != 0 {
+            return Err(FromHexError::OddLength);
+        }
+        if data.len() / 2 != out.len() {
+            return Err(FromHexError::InvalidStringLength);
+        }
+        for i in 0..out.len()
+            invariant slice_prefix(data, out, i),
+        {
+            let high: u8 = val(data[2 * i], 2 * i)?;
+            let low: u8 = val(data[2 * i + 1], 2 * i + 1)?;
+            assert(high < 16 && low < 16 ==> high << 4 | low == high * 16 + low) by (bit_vector);
+            out[i] = high << 4 | low;
+        }
+        Ok(())
+    }
+
+    #[summary("r is the result of decoding t")]
+    spec fn decoded(t: &[u8], r: Result<Vec<u8>, FromHexError>) -> bool {
+        match r {
+            Ok(v) => hex_upto(t, t.len()) && decodes(t, v.as_slice()),
+            Err(e) => failed(t, e),
+        }
+    }
+
+    #[summary("v is the bytes the digits t stand for")]
+    spec fn decodes(t: &[u8], v: &[u8]) -> bool {
+        t.len() == 2 * v.len() && (forall|k: usize| k < v.len() ==> #[trigger] v[k] == pair(t, k))
+    }
+
+    #[summary("The digit of the 4-bit value x, in upper or lower case")]
+    spec fn digit(x: u8, upper: bool) -> u8 {
+        if x < 10 {
+            x + 48
+        } else if upper {
+            x + 55
+        } else {
+            x + 87
+        }
+    }
+
+    #[summary("The first n bytes of s are encoded in t, which is twice as long as s (the loop of encode_to_slice)")]
+    spec fn enc_slice_upto(s: &[u8], t: &[u8], n: usize) -> bool {
+        n <= s.len() && t.len() == 2 * s.len() && (forall|i: usize| i < n ==> t[2 * i] == digit(#[trigger] s[i] / 16, false) && t[2 * i + 1] == digit(s[i] % 16, false))
+    }
+
+    #[summary("t is the encoding of the first n bytes of s (the loop of encode_to_string)")]
+    spec fn enc_upto(s: &[u8], t: &[u8], upper: bool, n: usize) -> bool {
+        n <= s.len() && t.len() == 2 * n && (forall|i: usize| i < n ==> t[2 * i] == digit(#[trigger] s[i] / 16, upper) && t[2 * i + 1] == digit(s[i] % 16, upper))
+    }
+
+    #[summary("data as hex text in lower case (f9b4ca): two digits per byte, so twice as long as data; it decodes back to data")]
+    #[effects(alloc)]
+    fn encode(data: &[u8]) -> (r: String)
+        requires fits(data),
+        ensures encoded(data, r.as_bytes(), false), hex_upto(r.as_bytes(), r.len()), decodes(r.as_bytes(), data),
+    {
+        encode_to_string(data, false)
+    }
+
+    #[summary("Encodes input in lower case into output, which must be twice as long (InvalidStringLength otherwise, with output untouched)")]
+    #[effects(pure)]
+    #[uses(encoded, same)]
+    fn encode_to_slice(input: &[u8], output: &mut [u8]) -> (r: Result<(), FromHexError>)
+        ensures slice_encoded(input, output, old(output), r),
+    {
+        if input.len() * 2 != output.len() {
+            return Err(FromHexError::InvalidStringLength);
+        }
+        for i in 0..input.len()
+            invariant enc_slice_upto(input, output, i),
+        {
+            let byte: u8 = input[i];
+            output[2 * i] = hex_digit(byte >> 4, false);
+            output[2 * i + 1] = hex_digit(byte & 15, false);
+        }
+        Ok(())
+    }
+
+    #[summary("The encoding of source in the case upper says; it decodes back to source")]
+    #[effects(alloc)]
+    #[uses(is_hex, pair)]
+    fn encode_to_string(source: &[u8], upper: bool) -> (r: String)
+        requires fits(source),
+        ensures encoded(source, r.as_bytes(), upper), hex_upto(r.as_bytes(), r.len()), decodes(r.as_bytes(), source),
+    {
+        let mut t: String = String::with_capacity(source.len() * 2);
+        for i in 0..source.len()
+            invariant enc_upto(source, t.as_bytes(), upper, i), hex_upto(t.as_bytes(), 2 * i), dec_upto(t.as_bytes(), source, i),
+        {
+            let byte: u8 = source[i];
+            t.push(hex_char(byte >> 4, upper));
+            t.push(hex_char(byte & 15, upper));
+        }
+        t
+    }
+
+    #[summary("data as hex text in upper case (F9B4CA), otherwise as encode")]
+    #[effects(alloc)]
+    fn encode_upper(data: &[u8]) -> (r: String)
+        requires fits(data),
+        ensures encoded(data, r.as_bytes(), true), hex_upto(r.as_bytes(), r.len()), decodes(r.as_bytes(), data),
+    {
+        encode_to_string(data, true)
+    }
+
+    #[summary("t is the encoding of s: bytes 2i and 2i+1 of t are the digits of the high and the low half of byte i of s")]
+    spec fn encoded(s: &[u8], t: &[u8], upper: bool) -> bool {
+        t.len() == 2 * s.len() && (forall|i: usize| i < s.len() ==> t[2 * i] == digit(#[trigger] s[i] / 16, upper) && t[2 * i + 1] == digit(s[i] % 16, upper))
+    }
+
+    #[summary("e is the error of decoding t: OddLength for an odd length, else the first byte that is not a digit")]
+    spec fn failed(t: &[u8], e: FromHexError) -> bool {
+        match e {
+            FromHexError::InvalidHexCharacter(c, i) => t.len() % 2 == 0 && first_bad(t, c, i),
+            FromHexError::OddLength => t.len() % 2 == 1,
+            FromHexError::InvalidStringLength => false,
+        }
+    }
+
+    #[summary("c at position i is the first byte of t that is not a digit")]
+    spec fn first_bad(t: &[u8], c: u8, i: usize) -> bool {
+        i < t.len() && t[i] == c && !is_hex(c) && hex_upto(t, i)
+    }
+
+    #[summary("The encoding of s fits in a String")]
+    spec fn fits(s: &[u8]) -> bool {
+        s.len() <= 4611686018427387903
+    }
+
+    #[summary("The digit of the 4-bit value x as a character")]
+    #[effects(pure)]
+    fn hex_char(x: u8, upper: bool) -> (r: char)
+        requires x < 16,
+        ensures u32::from(r) == digit(x, upper), val_of(digit(x, upper)) == x,
+    {
+        match char::from_u32(hex_digit(x, upper) as u32) {
+            None => { assert(false); '0' },
+            Some(c) => c,
+        }
+    }
+
+    #[summary("The digit of the 4-bit value x, the inverse of val")]
+    #[effects(pure)]
+    #[uses(digit, val_of)]
+    fn hex_digit(x: u8, upper: bool) -> (r: u8)
+        requires x < 16,
+        ensures is_digit(x, upper, r),
+    {
+        if upper {
+            HEX_CHARS_UPPER[x as usize]
+        } else {
+            HEX_CHARS_LOWER[x as usize]
+        }
+    }
+
+    #[summary("The first n bytes of t are digits")]
+    spec fn hex_upto(t: &[u8], n: usize) -> bool {
+        n <= t.len() && (forall|i: usize| i < n ==> is_hex(#[trigger] t[i]))
+    }
+
+    #[summary("r is the digit of x and reads back as x")]
+    spec fn is_digit(x: u8, upper: bool, r: u8) -> bool {
+        r == digit(x, upper) && val_of(r) == x
+    }
+
+    #[summary("c is a digit")]
+    spec fn is_hex(c: u8) -> bool {
+        val_of(c) < 16
+    }
+
+    #[summary("The text Rust's Display writes for e")]
+    #[effects(alloc)]
+    fn message(e: FromHexError) -> String {
+        let mut s: String = String::new();
+        match e {
+            FromHexError::InvalidHexCharacter(c, index) => { s.push_str("Invalid character "); push_debug_char(&mut s, c); s.push_str(" at position "); std::num::push_u64(&mut s, index as u64); },
+            FromHexError::OddLength => s.push_str("Odd number of digits"),
+            FromHexError::InvalidStringLength => s.push_str("Invalid string length"),
+        }
+        s
+    }
+
+    #[summary("The byte that digits 2k and 2k+1 of t stand for")]
+    spec fn pair(t: &[u8], k: usize) -> u8 {
+        val_of(t[2 * k]) * 16 + val_of(t[2 * k + 1])
+    }
+
+    #[summary("Appends the byte c read as a character (Rust's c as char) the way Rust's Debug writes a char: in single quotes, with the escapes of char::escape_debug")]
+    #[effects(alloc)]
+    fn push_debug_char(s: &mut String, c: u8) -> () {
+        s.push('\'');
+        if c == 0 {
+            s.push_str("\\0");
+        } else if c == 9 {
+            s.push_str("\\t");
+        } else if c == 10 {
+            s.push_str("\\n");
+        } else if c == 13 {
+            s.push_str("\\r");
+        } else if c == 39 {
+            s.push_str("\\'");
+        } else if c == 92 {
+            s.push_str("\\\\");
+        } else if c < 32 || c >= 127 && c <= 160 || c == 173 {
+            s.push_str("\\u{");
+            std::num::push_u64_hex(s, c as u64);
+            s.push('}');
+        } else {
+            match char::from_u32(c as u32) {
+                None => { assert(false); },
+                Some(ch) => s.push(ch),
+            }
+        }
+        s.push('\'');
+    }
+
+    #[summary("The round trip: decoding the encoding of data gives data. Proved from the contracts of encode and decode alone; it runs both")]
+    #[effects(alloc)]
+    #[uses(failed, first_bad, is_hex)]
+    fn round_trip(data: &[u8]) -> (r: Result<Vec<u8>, FromHexError>)
+        requires fits(data),
+        ensures back(data, r),
+    {
+        let t: String = encode(data);
+        let d: Result<Vec<u8>, FromHexError> = decode(t.as_bytes());
+        proof {
+            match d {
+                Ok(v) => {},
+                Err(e) => match e { FromHexError::InvalidHexCharacter(c, i) => {}, FromHexError::OddLength => {}, FromHexError::InvalidStringLength => {}, },
+            }
+        }
+        d
+    }
+
+    #[summary("a and b hold the same bytes")]
+    spec fn same(a: &[u8], b: &[u8]) -> bool {
+        a.len() == b.len() && (forall|k: usize| k < a.len() ==> #[trigger] a[k] == b[k])
+    }
+
+    #[summary("r is the result of decoding t into v")]
+    spec fn slice_decoded(t: &[u8], v: &[u8], r: Result<(), FromHexError>) -> bool {
+        match r {
+            Ok(u) => hex_upto(t, t.len()) && decodes(t, v),
+            Err(e) => slice_failed(t, v.len(), e),
+        }
+    }
+
+    #[summary("r is the result of encoding s into t, which held t0: the lower case encoding, or InvalidStringLength with t unchanged when t does not have 2 * s.len() bytes")]
+    spec fn slice_encoded(s: &[u8], t: &[u8], t0: &[u8], r: Result<(), FromHexError>) -> bool {
+        match r {
+            Ok(u) => encoded(s, t, false),
+            Err(e) => t.len() != 2 * s.len() && same(t, t0) && (match e { FromHexError::InvalidHexCharacter(c, i) => false, FromHexError::OddLength => false, FromHexError::InvalidStringLength => true, }),
+        }
+    }
+
+    #[summary("e is the error of decoding t into n bytes: OddLength, else InvalidStringLength when t does not have 2n bytes, else the first byte that is not a digit")]
+    spec fn slice_failed(t: &[u8], n: usize, e: FromHexError) -> bool {
+        match e {
+            FromHexError::InvalidHexCharacter(c, i) => t.len() == 2 * n && first_bad(t, c, i),
+            FromHexError::OddLength => t.len() % 2 == 1,
+            FromHexError::InvalidStringLength => t.len() % 2 == 0 && t.len() != 2 * n,
+        }
+    }
+
+    #[summary("The first n bytes of v are the pairs of t, t is twice as long as v and its first 2n bytes are digits (the loop of decode_to_slice)")]
+    spec fn slice_prefix(t: &[u8], v: &[u8], n: usize) -> bool {
+        n <= v.len() && 2 * v.len() == t.len() && hex_upto(t, 2 * n) && (forall|k: usize| k < n ==> #[trigger] v[k] == pair(t, k))
+    }
+
+    #[summary("The value of the digit c found at position idx")]
+    #[effects(pure)]
+    #[uses(is_hex, val_of)]
+    fn val(c: u8, idx: usize) -> (r: Result<u8, FromHexError>)
+        ensures val_result(c, idx, r),
+    {
+        if c >= b'A' && c <= b'F' {
+            Ok(c - b'A' + 10)
+        } else if c >= b'a' && c <= b'f' {
+            Ok(c - b'a' + 10)
+        } else if c >= b'0' && c <= b'9' {
+            Ok(c - b'0')
+        } else {
+            Err(FromHexError::InvalidHexCharacter(c, idx))
+        }
+    }
+
+    #[summary("The value of the digit c, 16 for a byte that is not a digit")]
+    spec fn val_of(c: u8) -> u8 {
+        if 65 <= c && c <= 70 {
+            c - 55
+        } else if 97 <= c && c <= 102 {
+            c - 87
+        } else if 48 <= c && c <= 57 {
+            c - 48
+        } else {
+            16
+        }
+    }
+
+    #[summary("r is Ok with the value of c when c is a digit, else InvalidHexCharacter(c, idx)")]
+    spec fn val_result(c: u8, idx: usize, r: Result<u8, FromHexError>) -> bool {
+        match r {
+            Ok(x) => is_hex(c) && x == val_of(c),
+            Err(e) => !is_hex(c) && (match e { FromHexError::InvalidHexCharacter(d, i) => d == c && i == idx, FromHexError::OddLength => false, FromHexError::InvalidStringLength => false, }),
+        }
+    }
+}

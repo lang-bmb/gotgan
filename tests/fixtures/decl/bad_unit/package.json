@@ -1,0 +1,6 @@
+{
+  "name": "bad_unit",
+  "version": "0.1.0",
+  "summary": "A unit named with a reserved word",
+  "units": ["fn"]
+}

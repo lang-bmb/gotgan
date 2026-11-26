@@ -1,0 +1,4 @@
+# The second case uses an escape the case format does not have (\q):
+# gotgan test must stop with exit code 2.
+|banana|3\n
+|ban\qana|3\n

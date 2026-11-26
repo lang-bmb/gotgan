@@ -1,0 +1,13 @@
+{
+  "name": "test_unit_clash",
+  "version": "0.1.0",
+  "summary": "A test unit with the name of a unit of the package",
+  "units": ["test_unit_clash"],
+  "tests": [
+    {
+      "units": ["test_unit_clash"],
+      "cases": ["cases.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ]
+}

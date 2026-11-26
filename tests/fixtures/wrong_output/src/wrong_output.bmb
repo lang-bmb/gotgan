@@ -1,0 +1,18 @@
+#[summary("What the unit wrong_output holds")]
+mod wrong_output {
+    #[summary("How many bytes of data are b")]
+    #[effects(pure)]
+    fn count(data: &[u8], b: u8) -> (r: usize)
+        ensures r <= data.len(),
+    {
+        let mut n: usize = 0;
+        for i in 0..data.len()
+            invariant n <= i,
+        {
+            if data[i] == b {
+                n = n + 1;
+            }
+        }
+        n
+    }
+}

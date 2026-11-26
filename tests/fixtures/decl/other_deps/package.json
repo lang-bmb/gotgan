@@ -1,0 +1,10 @@
+{
+  "name": "other_deps",
+  "version": "0.1.0",
+  "summary": "Declares a dependency on another package, which this slice does not understand",
+  "units": ["other_deps"],
+  "deps": {
+    "std": ["num"],
+    "hex": ["hex"]
+  }
+}

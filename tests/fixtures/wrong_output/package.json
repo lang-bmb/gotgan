@@ -1,0 +1,16 @@
+{
+  "name": "wrong_output",
+  "version": "0.1.0",
+  "summary": "A test case that expects the wrong output",
+  "units": ["wrong_output"],
+  "deps": {
+    "std": []
+  },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ]
+}

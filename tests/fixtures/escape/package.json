@@ -1,0 +1,9 @@
+{
+  "name": "escape",
+  "version": "0.1.0",
+  "summary": "A proved function that carries an assume it does not need",
+  "units": ["escape"],
+  "deps": {
+    "std": []
+  }
+}

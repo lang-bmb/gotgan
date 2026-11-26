@@ -1,0 +1,16 @@
+{
+  "name": "bad_cases",
+  "version": "0.1.0",
+  "summary": "A case file with an escape the format does not have",
+  "units": ["bad_cases"],
+  "deps": {
+    "std": []
+  },
+  "tests": [
+    {
+      "units": ["driver"],
+      "cases": ["cases.txt"],
+      "format": "args|stdin|stdout"
+    }
+  ]
+}

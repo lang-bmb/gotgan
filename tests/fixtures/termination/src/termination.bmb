@@ -1,0 +1,16 @@
+#[summary("Counts the lines of standard input with a loop that has no decreases: proved for partial correctness only")]
+mod termination {
+    #[summary("Writes the number of lines of standard input")]
+    #[effects(alloc, io, nondet)]
+    fn count_lines() -> () {
+        let mut n: u64 = 0;
+        let mut s: String = String::new();
+        loop {
+            match std::io::read_line(&mut s) {
+                Ok(k) => { if k == 0 { break; } n = n.saturating_add(1); },
+                Err(e) => { break; },
+            }
+        }
+        print_u64(n);
+    }
+}

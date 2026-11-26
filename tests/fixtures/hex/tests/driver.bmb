@@ -1,0 +1,113 @@
+#[summary("Test driver of the hex package: runs one operation on the bytes of standard input and writes the result to standard output. The operation is the first argument: encode, encode_upper, decode, round_trip, or encode_to_slice N and decode_to_slice N with an output slice of N zero bytes. A success writes the bytes or text the operation gives; a failure writes Err(..) with the Debug text of the error, or its Display text when the last argument is display. A bad command line exits with 2")]
+mod driver {
+    #[summary("Writes the error e: its Display text when display, else Err(..) around its Debug text")]
+    #[effects(alloc, io)]
+    fn fail(e: hex::FromHexError, display: bool) -> () {
+        if display {
+            let m: String = hex::message(e);
+            print_str(m.as_str());
+        } else {
+            let d: String = hex::debug(e);
+            print_str("Err(");
+            print_str(d.as_str());
+            print_str(")");
+        }
+    }
+
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let args: Vec<String> = std::env::args();
+        if args.len() < 2 {
+            usage();
+        }
+        let display: bool = args.len() >= 3 && args[args.len() - 1] == "display";
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(e) => { eprint_str("driver: cannot read standard input\n"); std::process::exit(2); },
+        }
+        if input.len() > 4611686018427387903 {
+            usage();
+        }
+        let op: String = args[1].clone();
+        if op == "encode" {
+            let t: String = hex::encode(input.as_slice());
+            print_str(t.as_str());
+        } else if op == "encode_upper" {
+            let t: String = hex::encode_upper(input.as_slice());
+            print_str(t.as_str());
+        } else if op == "decode" {
+            vec_result(hex::decode(input.as_slice()), display);
+        } else if op == "round_trip" {
+            vec_result(hex::round_trip(input.as_slice()), display);
+        } else if op == "encode_to_slice" || op == "decode_to_slice" {
+            if args.len() < 3 {
+                usage();
+            }
+            let n: usize = size(args[2].as_str());
+            let mut out: Vec<u8> = zeros(n);
+            if op == "encode_to_slice" {
+                let r: Result<(), hex::FromHexError> = hex::encode_to_slice(input.as_slice(), out.as_mut_slice());
+                slice_result(r, out.as_slice(), display);
+            } else {
+                let r: Result<(), hex::FromHexError> = hex::decode_to_slice(input.as_slice(), out.as_mut_slice());
+                slice_result(r, out.as_slice(), display);
+            }
+        } else {
+            usage();
+        }
+    }
+
+    #[summary("The size argument of a slice operation: a decimal number up to 2^20")]
+    #[effects(io)]
+    fn size(a: &str) -> (r: usize)
+        ensures r <= 1048576,
+    {
+        match std::num::parse_u64(a) {
+            None => { usage(); 0 },
+            Some(n) => { if n > 1048576 { usage(); 0 } else { n as usize } },
+        }
+    }
+
+    #[summary("Writes the result of a slice operation: the slice on success")]
+    #[effects(alloc, io)]
+    fn slice_result(r: Result<(), hex::FromHexError>, out: &[u8], display: bool) -> () {
+        match r {
+            Ok(u) => print_bytes(out),
+            Err(e) => fail(e, display),
+        }
+    }
+
+    #[summary("Ends the run on a bad command line")]
+    #[effects(io)]
+    fn usage() -> ()
+        ensures false,
+    {
+        eprint_str("usage: driver encode|encode_upper|decode|round_trip|encode_to_slice N|decode_to_slice N [display] < input\n");
+        std::process::exit(2);
+    }
+
+    #[summary("Writes the result of decode or round_trip: the bytes on success")]
+    #[effects(alloc, io)]
+    fn vec_result(r: Result<Vec<u8>, hex::FromHexError>, display: bool) -> () {
+        match r {
+            Ok(v) => print_bytes(v.as_slice()),
+            Err(e) => fail(e, display),
+        }
+    }
+
+    #[summary("n zero bytes")]
+    #[effects(alloc)]
+    fn zeros(n: usize) -> (r: Vec<u8>)
+        requires n <= 1048576,
+        ensures r.len() == n,
+    {
+        let mut v: Vec<u8> = Vec::with_capacity(n);
+        for i in 0..n
+            invariant v.len() == i,
+        {
+            v.push(0);
+        }
+        v
+    }
+}

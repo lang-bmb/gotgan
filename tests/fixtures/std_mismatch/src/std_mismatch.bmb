@@ -1,0 +1,11 @@
+#[summary("Reads a decimal number with std::num while deps.std names only str")]
+mod std_mismatch {
+    #[summary("The number written in s, 0 when s is not one")]
+    #[effects(pure)]
+    fn number(s: &str) -> u64 {
+        match std::num::parse_u64(s) {
+            None => 0,
+            Some(n) => n,
+        }
+    }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "bad_version",
+  "version": "0.1",
+  "summary": "A version that is not MAJOR.MINOR.PATCH",
+  "units": ["bad_version"]
+}

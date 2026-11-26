@@ -1,0 +1,3 @@
+# The second case expects a wrong count: gotgan test must fail with exit code 1.
+|banana|3\n
+|banana|4\n

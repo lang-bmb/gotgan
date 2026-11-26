@@ -1,0 +1,13 @@
+#[summary("Test driver of the package bad_cases: writes how many bytes of standard input are the letter a")]
+mod driver {
+    #[effects(alloc, io, nondet)]
+    fn main() -> () {
+        let mut input: Vec<u8> = Vec::new();
+        match std::io::read_to_end(&mut input) {
+            Ok(n) => {},
+            Err(e) => { eprint_str("driver: cannot read standard input\n"); std::process::exit(2); },
+        }
+        let n: usize = bad_cases::count(input.as_slice(), b'a');
+        print_u64(n as u64);
+    }
+}
